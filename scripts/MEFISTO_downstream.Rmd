@@ -1,0 +1,490 @@
+---
+title: "Systems Immunology Malaria Traveller Cohort"
+subtitle: "MEFISTO downstream analysis"
+author: "Maximilian Julius Lautenbach"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output:
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: kate
+    code_folding: hide
+    df_print: paged
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/reports/")})
+---
+
+```{r setup, include=FALSE}
+result.dir <- paste0("results/figures/")
+options(stringsAsFactors = FALSE) 
+```
+
+## required libraries
+```{r packages, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(viridis)
+library(MOFA2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(circlize)
+source("helper_fun.R")
+```
+
+# Preparation
+
+### load trained mefisto model
+* script for model training: ```MEFISTO.R```
+
+```{r message=FALSE, warning=FALSE}
+model <- load_model("../data/MEFISTO_model_updated.hdf5", load_interpol_Z = TRUE)
+```
+
+
+### load additional data 
+
+```{r message=FALSE, warning=FALSE}
+mefisto.input <- readRDS("../data/MEFISTO_input_data.Rds")
+all.data <- readRDS("../data/ALL_input_data.Rds")
+subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
+sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
+```
+
+
+### add meta data to model
+* ```TravellerCohort_SubjectTable.csv```
+
+```{r add sample meta data}
+samples_metadata(model) <- samples_metadata(model) %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sample)),
+         ID = gsub("\\|.*","",sample)) %>% 
+  inner_join(subjectTable, by=c("ID")) %>%
+  distinct()
+## rename view names
+views_names(model) <- c("Immune cells", "Plasma proteins")
+```
+
+### extract model factors and weights
+
+```{r}
+factors.all <- get_factors(model,
+                           factors = "all",
+                           scale = FALSE,
+                           as.data.frame = T) %>%
+  inner_join(model@samples_metadata %>% select(-group), by="sample")
+weights.all <- get_weights(model,
+                           views = "all",
+                           factors = "all", 
+                           as.data.frame = TRUE)
+```
+
+# MEFISTO model downstream analysis
+
+## Figure 2
+
+### Fig. 2A - Variance explained
+
+```{r}
+(p1a <- as.data.frame(model@cache$variance_explained$r2_total) %>%
+   rownames_to_column("View") %>% 
+   gather(group,value,-View) %>% 
+   mutate(group = factor(group, levels = c("primary_infected","previously_exposed"))) %>% 
+   ggplot(aes(x=group, y= value, fill=View)) +
+   geom_bar(stat="identity",position=position_dodge()) +
+   scale_fill_manual(values = OMICS_colors) +
+   labs(x = "",
+        y = expression(paste("Total Var. ", r^{2}, " (%)")))+
+   theme_classic(base_size = 6) +
+   theme(legend.position = "top",
+         axis.text.x = element_blank(),
+         axis.ticks.x = element_blank()))
+ggsave(file = paste0("../plots/total_variance_font12.pdf"),p1a, width = 5, height = 2.5 , useDingbats = FALSE)
+
+(p1a2 <- plot_variance_explained(model) + 
+    scale_fill_distiller(type = "seq",
+                         palette = 1,
+                         direction = 1,
+                         values = NULL,
+                         space = "Lab",
+                         na.value = "grey50",
+                         guide = "colourbar",
+                         aesthetics = "fill") +
+    theme(axis.ticks.x = element_blank(),
+          axis.text.x = element_text(size = 6, angle = 45, hjust = 0.8)))
+#legend.justification = "top"))
+ggsave(file = paste0("../plots/variance_perfactor_font12.pdf"), p1a2, width = 7 ,height = 2, useDingbats = FALSE)
+
+
+#pdf("../plots/Plot2a_upper.pdf", width = 2,height = 1,useDingbats = F,   title="main", paper = "a4", compress = T ) #colormodel = "cmyk"
+p1a  + theme_figpanel + theme(legend.position = "none")
+#dev.off()
+
+#pdf("../plots/Plot2a_lower.pdf", width = 2,height = 2,useDingbats = F,   title="main", paper = "a4", compress = T ) #colormodel = "cmyk"
+p1a2  + theme_figpanel #+ theme(legend.position = "right")
+#dev.off()
+
+```
+
+### Fig. 2B - Visualisation of Factor1 over time after symptom onset
+
+```{r}
+factor1 <- get_factors(model, factors = c("Factor1"), scale = F, as.data.frame = T) %>% 
+  inner_join(model@samples_metadata %>% select(-group), by="sample")
+
+(p1b <- ggplot(factor1, 
+               aes(x = weeks.po, y = value, color = Time)) + 
+    geom_point(size=1) +
+    geom_line(aes(group=ID),color="grey", alpha=0.15)+
+    theme_classic(base_size = 6) +
+    scale_color_manual(values=TIME_colors) +
+    labs(x = "Time after onset (weeks)",
+         y = "Factor 1 values",
+         color = "Sample time point",
+         fill = "weeks") +
+    theme12 +
+    theme(#legend.position='top',
+      legend.title.align=0.5,
+      legend.position =  c(0.6, 0.9)) +
+    scale_x_continuous(breaks = pretty(factor1$weeks.po, n = 10)) +
+    guides(colour=guide_legend(title="Sample Time Point",
+                               override.aes=list(size=1),
+                               nrow=2)))
+ ggsave(paste0("../plots/Factor1_vs_weekspo.pdf"), p1b, width = 5, height = 5)
+ 
+#pdf("../plots/Factor1_vs_weekspo_revision.pdf", width = 2,height = 2,useDingbats = F,   title="main", paper = "a4", compress = T ) #colormodel = "cmyk"
+p1b + theme_figpanel
+#dev.off()
+```
+
+### Fig. 2C - Lollipop-plots of Factor1 - driving features
+* Top 10 positive and negative Factor 1 features
+
+```{r}
+## Immune cells
+top10.feature.cells <- bind_rows(get_weights(model,
+                                             views = "Immune cells",
+                                             factors = 1,
+                                             as.data.frame = TRUE,
+                                             scale = T) %>%
+                                   arrange(desc(value)) %>% 
+                                   head(10) %>% mutate(direction = "positive"),
+                                 get_weights(model,
+                                             views = "Immune cells",
+                                             factors = 1,
+                                             as.data.frame = TRUE,
+                                             scale = T) %>%
+                                   arrange(value) %>% 
+                                   head(10) %>% mutate(direction = "negative"))
+
+## save plot data
+write.csv(top10.feature.cells, "../data/Top10_Cells_F1.csv", row.names = F)
+
+## lollipop plot 
+(p1c1 <- top10.feature.cells %>% 
+    mutate(direction = factor(as.factor(direction), levels=c("positive","negative"))) %>% 
+    mutate(feature = as.character(feature)) %>% 
+    ungroup() %>%  
+    lollipop_plot() +
+    labs(title = "Immune cells") +
+    scale_y_continuous(limits = c(-1, 1), breaks = seq(-1, 1, by = 0.5)))
+#ggsave(paste0("../plots/TopImmunecells_TopWeights_MOFAplot.pdf"),p1c1, height = 4.5, width = 5.2)
+
+## Plasma proteins
+top10.feature.proteins <- bind_rows(get_weights(model,
+                                                views = "Plasma proteins",
+                                                factors = 1,
+                                                as.data.frame = TRUE,
+                                                scale = T) %>%
+                                      arrange(desc(value)) %>% 
+                                      head(10) %>% mutate(direction = "positive"),
+                                    get_weights(model,
+                                                views = "Plasma proteins",
+                                                factors = 1,
+                                                as.data.frame = TRUE,
+                                                scale = T) %>%
+                                      arrange(value) %>% 
+                                      head(10) %>% mutate(direction = "negative"))
+
+## save plot data
+write.csv(top10.feature.proteins, "../data/Top10_Proteins_F1.csv", row.names = F)
+
+## lollipop plot 
+(p1c2 <- top10.feature.proteins %>%
+    mutate(direction = factor(as.factor(direction), levels=c("positive","negative"))) %>% 
+    mutate(feature = as.character(feature)) %>% 
+    ungroup() %>% 
+    lollipop_plot() +
+    labs(title = "Plasma proteins") +
+    scale_y_continuous(limits = c(-0.5, 1), breaks = seq(-0.5, 1, by = 0.5)))
+#ggsave(paste0("../plots/TopPlasmaproteins_TopWeights_MOFAplot.pdf"),p1c2, height = 4.5, width = 3)
+
+
+library(patchwork)
+#pdf("../plots/TopWeights_Lollipop.pdf", width = 3.5,height = 2,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+p1c1 + theme_figpanel | p1c2 + theme_figpanel
+#dev.off()
+
+```
+
+### Fig. 1D - Immune landscape heatmap 
+
+#### Imputation of missing data points based on modified version of MOFA's heatmap function 
+* modified function in ```helper_fun.R```
+
+```{r message=FALSE, warning=FALSE}
+data.prot.inputed <- plot_data_heatmap_ordered(object <- model,
+                                               factor="Factor1",
+                                               view="Plasma proteins",
+                                               groups = "all",
+                                               features = read_csv("../data/Top10_Proteins_F1.csv")  %>% pull(feature),
+                                               imputed = TRUE,
+                                               denoise = TRUE,
+                                               max.value = NULL,
+                                               min.value = NULL) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample")
+
+data.facs.inputed <- plot_data_heatmap_ordered(object <- model,
+                                               factor="Factor1",
+                                               view="Immune cells",
+                                               groups = "all",
+                                               features = read_csv("../data/Top10_Cells_F1.csv")  %>% pull(feature),
+                                               imputed = TRUE,
+                                               denoise = TRUE,
+                                               max.value = NULL,
+                                               min.value = NULL) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("sample")
+
+## save all data
+data.all.inputed <- data.prot.inputed %>% 
+  rename_with(~paste0("Protein_", .x), -c("sample")) %>% 
+  inner_join(data.facs.inputed %>% 
+               rename_with(~paste0("Cells_", .x), -c("sample")), 
+             by="sample") %>% 
+  right_join(samples_metadata(model) %>% select(sample,group,Time,days.po, weeks.po, weeks.po_warped), by="sample") %>% 
+  select(sample,group,Time,days.po,weeks.po,weeks.po_warped,everything())
+#write.csv(data.all.inputed,"../data/Factor1_inputed_samples.csv", row.names = F)
+```
+
+#### ComplexHeatmap on imputed data
+
+```{r fig.asp=0.5, message=FALSE, warning=FALSE}
+mat <- data.all.inputed %>% 
+  arrange(weeks.po_warped) %>%
+  select(-c("days.po","group","Time","weeks.po","weeks.po_warped")) %>%
+  column_to_rownames("sample") %>% 
+  t() 
+
+## sample annotation
+sample_anno <- data.all.inputed %>% #
+  select(sample,group,Time, weeks.po_warped) %>% #days.po, weeks.po,
+  column_to_rownames("sample") %>% 
+  rename("Sample Time Point" = Time,
+         "Weeks after onset warped" = weeks.po_warped,
+         "Group" = group) 
+
+## feature annotation
+feature_anno <- data.frame("feature" = rownames(mat)) %>% 
+  mutate(View = ifelse(grepl("Protein",feature),"Plasma proteins","Immune cells"))
+
+rownames(feature_anno) <- rownames(feature_anno$feature)
+
+feature_anno <- feature_anno %>% select(-feature)
+
+## plotting heatmap
+(hm <- mat %>% 
+    na.omit() %>% 
+    ComplexHeatmap::pheatmap(cluster_rows = T, 
+                             cluster_cols = F,
+                             show_colnames = F, 
+                             show_rownames = T,
+                             annotation_names_row = F,
+                             annotation_colors = list("Sample Time Point" = TIME_colors,
+                                                      "Weeks after onset warped"=viridis::viridis(80, direction = -1), 
+                                                      "Group" = ENDEMIC_colors, "View" = OMICS_colors),
+                             annotation_legend = T,
+                             scale = "row",
+                             annotation_row = feature_anno,
+                             annotation_col = sample_anno,
+                             clustering_distance_rows= "euclidean",
+                             cellwidth = 3, 
+                             cellheight = 6,
+                             fontsize_row = 6,
+                             treeheight_row =40,
+                             name = "z-score",
+                             fontsize = 12,
+                             color = colorRamp2(c(-1,0,1), c("#4575b4","#ffffbf","#d73027"))))
+
+#pdf(file=paste0("../plots/Heatmap_top10_imputed.pdf"), width=14.5, height = 10)
+hm 
+#dev.off()
+```
+
+## Figure Supplementary 2
+
+### Fig. S2A sample coverage
+```{r message=FALSE, warning=FALSE}
+#pdf("../plots/SampleCoverage_Cohort_Overview.pdf", width = 6.5,height = 4,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+
+plot_data_overview(model,
+                   colors = OMICS_colors,
+                   show_covariate = TRUE,
+                   show_dimensions = TRUE) +
+  theme(axis.text = element_text(size=6))
+#dev.off()
+#ggsave(paste0("../plots/SampleCoverage_Cohort_Overview.pdf"), width = 10, height = 6)
+```
+
+### Fig. S2B - Scatterplot Factor1 vs Factor2 
+
+```{r fig.show="hold", message=FALSE, warning=FALSE, out.width="50%"}
+(p1a3 <- factors.all %>% 
+   spread(factor,value) %>% 
+   ggplot(aes(x=Factor1,y=Factor2, col=days.po.log)) +
+   geom_point() +
+   scale_color_viridis_c(direction=-1) +
+   labs(color="Days post onset\n    (log2 scale)") +
+   
+   theme_classic(base_size = 6) +
+   theme(legend.direction = 'horizontal',
+         legend.title.align=0.5,
+         legend.position = "top") + #c(0.5, 0.9)) +
+   theme_figpanel)
+#pdf("../plots/Factor1vs2_dayspo.pdf", width = 2.5,height = 3,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+p1a3
+#dev.off()
+#ggsave(paste0("../plots/Factor1vs2_dayspo.pdf"), width = 3.5, height = 4)
+```
+
+### Fig. S2C - Time point grouped Factor1 values over time after symptom onset
+
+```{r}
+#pdf("../plots/Factor1_facet_vs_weekspo.pdf", width = 6,height = 3,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+
+ggplot() + 
+  geom_point(data=select(factor1, -Time),aes(x = weeks.po, y = value), col="grey80") +
+  geom_point(data=factor1,aes(x = weeks.po, y = value, color = Time)) +
+  facet_grid(~Time) +
+  geom_point(size=1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic(base_size = 6) +
+  scale_color_manual(values=TIME_colors) +
+  labs(x = "Time after onset (weeks)",
+       y = "Factor 1 values",
+       color = "Sample time point",
+       fill = "weeks") +
+  theme12 +
+  theme(legend.position='bottom') +
+  guides(colour=guide_legend(title="",
+                             override.aes=list(size=2),
+                             nrow=1))  +
+    theme_figpanel 
+
+#dev.off()
+```
+
+
+## Figure 4
+
+### Fig. 4A
+
+### 3.2.1 Smooth fit for groups
+
+```{r fig.show="hold", message=FALSE, warning=FALSE, out.width="100%", fig.height=3, fig.width=3}
+#pdf("../plots/Factor1_horizontal_smooth.pdf", width = 1.4,height = 1.4, useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+
+factor1 %>% 
+  ggplot(aes(x=weeks.po,y=value,group=group)) +
+  geom_point(aes(fill=group),size=1,shape=21, color="black") +
+  geom_smooth(aes(color=group),se = F) +
+  scale_color_manual(values = ENDEMIC_colors) +
+  scale_fill_manual(values = ENDEMIC_colors) +
+  labs(x = "Time after onset\n(weeks)",
+       y = "Factor values",
+       color = NULL,
+       fill = NULL) +
+  facet_wrap(~factor, scales = "free", ncol = 5) +
+  theme_classic(base_size = 6) +
+  update_geom_defaults("line",list(size=0.2)) +
+  scale_x_continuous(trans = "pseudo_log",breaks = c(0,10,20,40,60)) + 
+  theme_figpanel +
+  theme(legend.position='none') 
+
+#dev.off()
+
+```
+
+
+
+
+### Fig. 4C
+
+```{r message=FALSE, warning=FALSE}
+#pdf("../plots/gdTcellsF1_vs_Pseudotime.pdf", width = 1.4,height = 3,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+
+plot_data_vs_cov(model, 
+                 warped = T,
+                 factor = 1,
+                 features = c("Total gdT cells","Vd2- gdT cells","Vd2+ gdT cells"),
+                 view = "Immune cells",
+                 dot_size = 1) +
+  facet_wrap(~feature, ncol = 1) +
+  geom_smooth(aes(group = group, col = group),
+              se=F) +
+  theme_classic(base_size = 6) +
+  scale_fill_manual(values = ENDEMIC_colors) +
+  scale_color_manual(values = ENDEMIC_colors) +
+   #scale_x_continuous(trans = "pseudo_log",breaks = c(0,10,20,40,60)) + 
+  scale_x_continuous(breaks = c(0.5,52), labels = c("Acute","Convalescence")) +
+  labs(x="",
+       y="MEFISTO-scaled cell counts") +
+  guides(fill = F,
+         col = F) +
+  update_geom_defaults("line",list(size=0.2)) +
+
+  theme_figpanel +
+  theme(legend.position='top',
+        axis.ticks.x = element_blank()) 
+#dev.off()
+```
+
+
+## Figure Supplementary 4
+
+### Fig. S4A
+
+```{r message=FALSE, warning=FALSE}
+#pdf("../plots/Factor1_endemic_vs_timepoint.pdf", width = 6,height =3,useDingbats = F,   title="Supplementary", paper = "a4", compress = T ) #colormodel = "cmyk"
+factor1 %>% 
+  mutate(group = factor(as.factor(group), levels = c("primary_infected", "previously_exposed"))) %>% 
+  ggplot(aes(x = group, y = value, color = group)) + 
+  geom_jitter(alpha=0.5, width = 0.2) +
+  geom_boxplot(alpha=0.5,show.legend = F) +
+  facet_grid(~Time) +
+  stat_compare_means(label = "p.format", show.legend = F,size=2, color="grey20") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic(base_size = 6) +
+  scale_color_manual(values=ENDEMIC_colors, breaks = c("primary_infected", "previously_exposed")) +
+  scale_fill_manual(values=ENDEMIC_colors, breaks = c("primary_infected", "previously_exposed")) +
+
+  labs(x ="",
+       y = "Factor 1 values",
+       color = "",
+       fill = "weeks",
+       caption = "Wilcoxon Rank sum test") +
+  jtools::theme_nice() +
+  theme_figpanel+
+  theme(legend.position = "right",
+        panel.spacing.x=unit(0.5, "lines"),
+       axis.text.x = element_blank(),
+        axis.ticks = element_blank()) 
+#dev.off()
+```

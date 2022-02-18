@@ -1,0 +1,730 @@
+---
+title: "Systems Immunology Malaria Traveller Cohort"
+subtitle: "Downstream correlation analysis"
+author: "Maximilian Julius Lautenbach"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output:
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: kate
+    code_folding: hide
+    df_print: paged
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../")})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(echo = TRUE, root.dir = getwd(), fig.width = 6, fig.height = 5, warning = FALSE, message = FALSE)
+options(stringsAsFactors = FALSE) 
+```
+
+## required libraries
+```{r message=FALSE}
+library(tidyverse)
+library(correlation)
+library(circlize)
+library(ComplexHeatmap) # needed for legends
+library(igraph)
+library(ggraph)
+source("helper_fun.R")
+```
+
+# Preparation
+
+## Importing data
+* selected features from MEFISTO model, generated with ```MEFISTO_downstream.Rmd```
+* IgG subclass Cummulative Response Score data, generated with ```CRScore.Rmd```
+
+```{r message=FALSE, warning=FALSE}
+subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
+selected.features.proteins <- read_csv("../data/Top10_Proteins_F1.csv")
+selected.features.cells <- read_csv("../data/Top10_Cells_F1.csv") 
+mefisto.input <- readRDS("../data/MEFISTO_input_data.Rds")
+data.ab <- read_csv("../data/TravellerCohort_IgGclass_long.csv")
+```
+
+# Correlation analysis
+
+## Figure 3
+
+### Correlations data prep
+
+```{r message=FALSE, warning=FALSE}
+corr.input <- mefisto.input %>% 
+  filter(feature %in% c(read_csv("../data/Top10_Cells_F1.csv") %>% pull(feature),
+                        read_csv("../data/Top10_Proteins_F1.csv")  %>% pull(feature))) %>% 
+  mutate(Time = gsub(".*\\|","",sample),
+         feature = paste0(view,"|",Time,"|",feature),
+         ID = gsub("\\|.*","",sample)) %>% 
+  select(ID,feature,value) %>% 
+  spread(feature,value)
+
+corr.output <- correlation::correlation(data = corr.input,
+                                        method = "spearman",
+                                        p_adjust = "fdr",
+                                        ci = 0.95,
+                                        redundant = T)
+
+```
+
+* filter for  acute time point cytokines and post acute immune cell subsets
+
+```{r}
+corr.output.filtered <- corr.output %>% 
+  as.tibble() %>% 
+  filter(grepl('Olink',Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs",Parameter2), grepl("D10|M1|M3|M6|Y1",Parameter2)) %>% 
+  arrange(desc(abs(rho)),p)
+corr.output.filtered
+```
+
+### Fig. 3A 
+* Overall correlation of pcute proteins with post-acute immune cell subsets
+* no __rho__ or __p value__ threshold 
+
+```{r fig.asp=1, message=FALSE, warning=FALSE}
+input <- corr.output.filtered %>% 
+  select(Parameter1,Parameter2,rho) %>% 
+  mutate(Parameter2 = gsub("Facs\\|","",Parameter2)) %>% 
+  spread(Parameter2,rho) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(Parameter1 = gsub("Olink\\|Acute\\|","",Parameter1)) %>% 
+  column_to_rownames("Parameter1") %>% 
+  t()  %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  mutate(Time = as.factor(gsub("\\|.*","",rowname))) %>% 
+  select(rowname, Time, everything()) %>% 
+  arrange(Time) 
+
+## set row/column annotation
+row.anno <- data.frame(rowname = input$rowname,
+                       SampleTimePoint = input$Time) %>%
+  column_to_rownames("rowname")
+
+col.anno <- data.frame(colname = names(input)[3:length(names(input))],
+                       SampleTimePoint = "Acute") %>%
+  column_to_rownames("colname")
+
+## plot heatmap
+(hm <- input %>% 
+    column_to_rownames("rowname") %>% 
+    select(-Time) %>% 
+    ComplexHeatmap::pheatmap(cluster_rows = T, 
+                             cluster_cols = T,
+                             show_colnames = T, 
+                             show_rownames = T,
+                             annotation_names_row = F,
+                             name = "Spearman rho",
+                             annotation_colors = list("SampleTimePoint" = TIME_colors),  
+                             annotation_legend = T,
+                             scale = "none",
+                             labels_row = gsub(".*\\|","",input$rowname),
+                             annotation_row = row.anno,
+                             annotation_col = col.anno,
+                             cellwidth = 10, 
+                             cellheight = 9,
+                             color = colorRamp2(c(-1,0,1), c("#4575b4","#ffffbf","#d73027"))))
+#pdf(file=paste0("../plots/Factor1_AcuteProt2PostAcuteCells_Cor_heatmap_all.pdf"), width=11, height = 15)
+hm
+#dev.off()
+```
+
+
+### Fig. 3B 
+* Corddiagram of significant correlations
+* threshold __rho__ 0.7
+* threshold __p value__ 0.05
+
+#### Color and legend settings
+```{r cord_plot_prep}
+col_fun = colorRamp2(c(-1,0,1), c("#4575b4","#ffffbf","#d73027"))
+lgd_rho <- Legend(col_fun = col_fun, title = "Spearman rho \n",
+                  legend_height = unit(0.9, "snpc"),
+                  grid_width = unit(0.2, "snpc"),
+                  labels_gp = gpar(fontsize = 30),
+                  title_gp = gpar(fontsize = 30)) ## dependend on ComplexHeatmap
+```
+
+#### Corddiagram
+```{r message=FALSE, warning=FALSE, fig.asp=1}
+df <- corr.output %>% 
+  as.tibble() %>% 
+  filter(grepl("Olink",Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs",Parameter2), grepl("D10|M1|M3|M6|Y1",Parameter2)) %>% 
+  arrange(desc(abs(rho)),p) %>% 
+  filter(p <= 0.05, abs(rho) > 0.7) %>% 
+  select(Parameter1,Parameter2,rho) %>% 
+  rename(from = Parameter1, to = Parameter2, value = rho) %>% 
+  mutate(from = gsub("Olink\\|","",from),
+         to = gsub("Facs\\|","",to)) %>% 
+  rename(r = value)
+
+sections <- as.data.frame(union(df[[1]], df[[2]]))
+colnames(sections) <- "union" 
+sections <- sections %>%
+  mutate(Time = gsub("\\|.*","",union),
+         feature = gsub(".*\\|","",union)) %>%
+  arrange(Time, feature)
+##============================================================# 
+##          CordDiagram                                       #
+##============================================================#
+#pdf(file=paste0("../plots/Factor1Top20_AcuteProt_PostCells_significant_corddiagram.pdf"), width=30, height = 30, pointsize = 10)
+
+chordDiagram(df, 
+             annotationTrack = "",
+             order = sections$union,
+             big.gap = 15,
+             small.gap = 2,
+             col=col_fun(df$r), 
+             scale = TRUE,
+             preAllocateTracks = list(
+               ## 1 (outer track for space)
+               list(bg.border = NA,#"black",
+                    bg.col=NULL,
+                    track.height = 0.4),
+               #2 (outer)
+               list(ylim = c(0, 1),
+                    bg.col = NA,
+                    bg.border = NA,
+                    track.height = 0.0001,
+                    bg.lty = par("lty"),
+                    bg.lwd = par("lwd"),
+                    big.gap = 10),
+               #3 (inner)
+               list(bg.border = NA,#"black",
+                    bg.col=NULL,
+                    track.height = 0.1)))
+
+circos.trackPlotRegion(track.index = 2, 
+                       bg.border = NA,
+                       panel.fun = function(x, y) {
+                         xlim = get.cell.meta.data("xlim")
+                         ylim = get.cell.meta.data("ylim")
+                         sector.name = sub(".*\\|","", get.cell.meta.data("sector.index"))
+                         
+                         circos.text(mean(xlim), ylim[1] + 1.1,
+                                     sector.name, 
+                                     facing = "clockwise", 
+                                     niceFacing = TRUE,
+                                     cex = 3,
+                                     adj = c(-0.05, 0.5), 
+                                     col = "black")
+                       })
+
+highlight.sector(c(sections[sections$Time == "Acute",]$union), 
+                 track.index = 3,
+                 col = "#C51B7D",
+                 text = "Acute",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+highlight.sector(c(sections[sections$Time == "D10",]$union), 
+                 track.index = 3,
+                 col =  "#E9A3C9",
+                 text = "D10",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+highlight.sector(c(sections[sections$Time == "M3",]$union), 
+                 track.index = 3,
+                 col = "#E6F5D0",
+                 text = "M3",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+highlight.sector(c(sections[sections$Time == "M6",]$union), 
+                 track.index = 3,
+                 col =  "#A1D76A",
+                 text = "M6",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+highlight.sector(c(sections[sections$Time == "Y1",]$union), 
+                 track.index = 3,
+                 col =  "#4D9221" ,
+                 text = "Y1",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+
+text(x = unit(0.8, "snpc"), # snpc unit gives you a square region,
+     y = unit(-0.97, "snpc"),
+     paste0("\n","FDR < 0.05","\n","| rho | > 0.7"), cex = 3)
+draw(lgd_rho, 
+     x = unit(1, "snpc"), # snpc unit gives you a square region,
+     y = unit(0.25, "snpc"),
+     just = "right")
+
+#dev.off()
+circos.clear()
+```
+
+### Fig. 3C-G
+
+#### Scatterplot
+
+```{r message=FALSE, warning=FALSE}
+corr.output.sigA_D10 <- corr.output %>% 
+  as.tibble() %>% 
+  filter(grepl("Olink",Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs",Parameter2), grepl("D10",Parameter2)) %>% 
+  filter(Parameter1 != Parameter2) %>% 
+  arrange(desc(abs(rho)),p) %>% 
+  filter(p <= 0.05)
+
+scatter.fig.folder <- "/CorrelationScatter/"
+ifelse(isFALSE(dir.exists(paste0("../plots",scatter.fig.folder))),
+       dir.create(paste0("../plots",scatter.fig.folder), recursive = TRUE),
+       paste0(scatter.fig.folder," Folder excists exists already!"))
+
+for(position in c(1:length(corr.output.sigA_D10$Parameter1))){
+  selection <- corr.output.sigA_D10 %>% 
+    slice(position) %>% 
+    select(Parameter1,Parameter2) %>% unlist() %>% unname()
+  
+  statistic_annotation <- corr.output.sigA_D10 %>% slice(position)
+  
+  plot.input <- corr.input %>% select(ID,selection) %>% 
+    na.omit() %>% inner_join(subjectTable %>% select(ID,Endemic),by="ID") %>% column_to_rownames("ID")
+  
+  plot <- plot.input %>% 
+    ggplot(aes(x = .[,1], y = .[,2])) +
+    coord_flip() +
+    geom_point(col="black",size=3, alpha = 0.7) +
+    labs(x = paste("NPX \n",selection[1]),
+         y = paste0(selection[2],"\n cells per uL blood (log2)")) +
+    geom_smooth(colour = "black", method = "lm", se = FALSE, alpha = 0.7) +
+    scale_color_manual(values=ENDEMIC_colors) +
+    labs(subtitle = paste0(" rho = ", round(statistic_annotation$rho, 2), 
+                           ", p.adj = ",round(statistic_annotation$p, 3),
+                           #", CI ",round(statistic_annotation$CI_low,2),"-",round(statistic_annotation$CI_high,2),
+                           ", n obs. = ",round(statistic_annotation$n_Obs, 3)))  +
+    theme_classic() +
+    theme12 +
+    theme(legend.position='none',
+          plot.subtitle=element_text(size=10, hjust=0.5, face="bold", color="black"))
+  #ggsave(paste0("../plots/",scatter.fig.folder,"CorrScatter_Rank",position,"_",selection[2],"_",selection[1],".pdf"),plot, width = 3.5, height = 3.5)
+}
+```
+
+## Figure 5
+
+### Fig. 5B 
+* Corddiagram of significant gdTcells ~acute protein associations only
+* threshold __rho__ 0.7
+* threshold __p value__ 0.05 
+
+```{r message=FALSE, warning=FALSE}
+df <- corr.output %>% 
+  as.tibble() %>% 
+  filter(grepl("Olink",Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs",Parameter2), grepl("D10|M1|M3|M6|Y1",Parameter2)) %>% 
+  filter(grepl("gdT cell", Parameter2)) %>% 
+  arrange(desc(abs(rho)),p) %>% 
+  filter(p <= 0.05) %>% 
+  select(Parameter1,Parameter2,rho) %>% 
+  rename(from = Parameter1, to = Parameter2, value = rho) %>% 
+  mutate(from = gsub("Olink\\|","",from),
+         to = gsub("Facs\\|","",to)) %>% 
+  rename(r = value)
+
+sections <- as.data.frame(union(df[[1]], df[[2]]))
+colnames(sections) <- "union" 
+sections <- sections %>%
+  mutate(Time = gsub("\\|.*","",union),
+         feature = gsub(".*\\|","",union)) %>%
+  arrange(Time, feature)
+##============================================================# 
+##          CordDiagram                                       #
+##============================================================#
+#pdf(file=paste0("../plots/gdTcells_AcuteProt_PostCells_significant_corddiagram.pdf"), width=30, height = 30, pointsize = 10)
+chordDiagram(df, 
+             annotationTrack = "",#c("grid"),
+             order = sections$union,
+             big.gap = 50,
+             small.gap = 2,
+             ## connection color
+             col=col_fun(df$r), 
+             scale = TRUE,
+             preAllocateTracks = list(
+               ## 1 (outer track for space)
+               list(bg.border = NA,#"black",
+                    bg.col=NULL,
+                    track.height = 0.4),
+               #2 (outer)
+               list(ylim = c(0, 1),
+                    bg.col = NA,
+                    bg.border = NA,
+                    track.height = 0.0001,
+                    bg.lty = par("lty"),
+                    bg.lwd = par("lwd"),
+                    big.gap = 10),
+               
+               #3 (inner)
+               list(bg.border = NA,#"black",
+                    bg.col=NULL,
+                    track.height = 0.1)))
+
+circos.trackPlotRegion(track.index = 2, 
+                       bg.border = NA,
+                       panel.fun = function(x, y) {
+                         xlim = get.cell.meta.data("xlim")
+                         ylim = get.cell.meta.data("ylim")
+                         sector.name = sub(".*\\|","", get.cell.meta.data("sector.index"))
+                         
+                         circos.text(mean(xlim), ylim[1] + 1.1,
+                                     sector.name, 
+                                     facing = "clockwise", 
+                                     niceFacing = TRUE,
+                                     cex = 3,
+                                     adj = c(-0.05, 0.5), 
+                                     col = "black")
+                       })
+
+highlight.sector(c(sections[sections$Time == "Acute",]$union), 
+                 track.index = 3,
+                 col = "#C51B7D",
+                 text = "Acute",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+highlight.sector(c(sections[sections$Time == "D10",]$union), 
+                 track.index = 3,
+                 col =  "#E9A3C9",
+                 text = "D10",
+                 cex = 3,
+                 text.col = "black",
+                 niceFacing = TRUE)
+
+text(x = unit(0.8, "snpc"), # snpc unit gives you a square region,
+     y = unit(-0.97, "snpc"),
+     paste0("\n","FDR < 0.05"), cex = 3)
+draw(lgd_rho, 
+     x = unit(1, "snpc"), # snpc unit gives you a square region,
+     y = unit(0.25, "snpc"),
+     just = "right",
+)
+#dev.off()
+circos.clear()
+
+```
+# Figure 7
+
+## Correlation of IgG subclass data
+
+```{r message=FALSE, warning=FALSE}
+corr.ab.input <- corr.input %>% 
+  full_join(data.ab %>% 
+              mutate(feature = paste0("CRS","|",Time,"|",feature)) %>% 
+              select(ID,feature,value) %>% 
+              spread(feature,value),
+            by="ID") %>% select(ID,contains("Acute"),contains("D10")) %>% 
+  column_to_rownames("ID")
+```
+
+```{r}
+corr.ab.output <- correlation::correlation(data = corr.ab.input,
+                                           method = "spearman",
+                                           p_adjust = "fdr",
+                                           ci = 0.95,
+                                           redundant = T)
+```
+
+## Acut Protein ~ Acute CRS
+
+### Fig. 7B
+* threshold __p value__ 0.05 
+
+```{r}
+selection.sig <- corr.ab.output %>% 
+  as.tibble() %>% 
+  filter(grepl("CRS",Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs|Olink",Parameter2), grepl("Acute",Parameter2)) %>% 
+    filter(Parameter1 != Parameter2) %>% 
+
+  arrange(desc(abs(rho)),p) %>%
+  #filter(abs(rho)>0.7) %>% 
+  filter(p <= 0.05)
+```
+
+
+
+```{r fig.asp=1}
+#mat <- corr.ab.output %>% 
+#  as.tibble() %>% 
+#  filter(grepl("Olink",Parameter1), grepl("Acute",Parameter1)) %>% 
+#  filter(grepl("CRS",Parameter2), grepl("Acute",Parameter2))  %>% #grepl("D10|M1|M3|M6|Y1",Parameter2)) %>% 
+#  filter(Parameter1 != Parameter2) %>% 
+#  arrange(desc(abs(rho)),p) %>% 
+#  filter(p <= 0.05) %>% 
+#  select(Parameter1,Parameter2,rho,p)
+ 
+mat <- selection.sig %>% 
+  select(Parameter1,Parameter2,rho,p)
+
+## define graph input
+vert <-  mat %>%
+  rename(x=Parameter1,
+         y=Parameter2,
+         r=rho) %>% 
+  select(x,y,r,p) %>% gather(item, node,x:y) %>%
+  group_by(node) %>% count(node) %>% 
+  mutate(to.split = node) %>% 
+  separate(to.split, sep="\\|", into=c("View","Time","feature"))
+
+graph_cors <- mat %>%
+  rename(x=Parameter1,
+         y=Parameter2,
+         r=rho) %>% 
+  select(x,y,r,p) %>% 
+  graph_from_data_frame(directed = FALSE, vert)
+
+## option 2 via layout
+layout <- create_layout(graph_cors, layout = 'igraph', algorithm = 'kk') 
+
+
+
+(gg <- 
+    ggraph(layout) +
+  geom_edge_link(aes(edge_alpha = abs(r), 
+                     color = r),
+  edge_width = 2) +
+  guides(edge_alpha = "none", edge_width = "none") +
+  geom_node_point(aes(color = Time,
+                      size = n),
+                  show.legend = T) +
+  guides(size = "none") +
+  labs(edge_color="Spearman rho") +
+  
+  scale_color_manual(values = TIME_colors) +
+  scale_edge_color_gradientn(limits = c(-1, 1), colors = c("#4575b4","#ffffbf","#d73027")) +
+  geom_node_text(aes(label = feature),
+                 size=10,
+                 repel = TRUE) +
+  theme_graph() +
+  scale_size(range = c(4,10)) +
+  labs(title = "Correlations of acute IgG subclass response and pro-inflammatory signature",
+       caption = "FDR < 0.05"))
+
+#ggsave(paste0("../plots/Acute_IgG_Subclass_CytokineCorrelation_graph.pdf"),gg, width = 10, height = 10)
+
+```
+
+
+### Fig. 7C
+#### Scatterplot
+
+```{r}
+## create folder
+scatter.fig.folder <- "/CorrelationScatter_wIgG_Acute/"
+ifelse(isFALSE(dir.exists(paste0("../plots",scatter.fig.folder))),
+       dir.create(paste0("../plots",scatter.fig.folder), recursive = TRUE),
+       paste0(scatter.fig.folder," Folder excists exists already!"))
+
+## loop to create scatterplots for significant correlations
+for(position in c(1:length(selection.sig$Parameter1))){
+  selection <- selection.sig %>% 
+    slice(position) %>% 
+    select(Parameter1,Parameter2) %>% unlist() %>% unname()
+  
+  statistic_annotation <- selection.sig %>% slice(position)
+  
+  plot.input <- corr.ab.input %>% select(selection) %>% 
+    na.omit() %>% rownames_to_column("ID") %>% inner_join(subjectTable %>% select(ID,Endemic),by="ID") %>% column_to_rownames("ID")
+  
+  plot <- plot.input %>% 
+    ggplot(aes(x = .[,1], y = .[,2])) +
+    coord_flip() +
+    geom_point(aes(col=Endemic),
+               size=3, alpha = 0.7) +
+    labs(x = paste(selection[1]),
+         y = paste0(selection[2])) +
+    geom_smooth(colour = "black", method = "lm", se = FALSE, alpha = 0.7) +
+    scale_color_manual(values=ENDEMIC_colors) +
+    labs(subtitle = paste0(" rho = ", round(statistic_annotation$rho, 2), 
+                           ", p.adj = ",round(statistic_annotation$p, 3),
+                           ", n obs. = ",round(statistic_annotation$n_Obs, 3)))  +
+    theme_classic() +
+    theme12 +
+    theme(legend.position='none',
+          plot.subtitle=element_text(size=10, hjust=0.5, face="bold", color="black"))
+ # ggsave(paste0("../plots",scatter.fig.folder,"CorrScatter_Rank",position,"_",selection[2],"_",selection[1],".pdf"),plot, width = 3.5, height = 3.5)
+}
+
+```
+
+
+
+```{r}
+corr.ab.output.sig <- corr.ab.output %>% 
+  as.tibble() %>% 
+  filter(grepl("CRS",Parameter1), grepl("Acute",Parameter1)) %>% 
+  filter(grepl("Facs",Parameter2), grepl("D10",Parameter2)) %>% 
+  arrange(desc(abs(rho)),p) %>%
+  filter(abs(rho)>0.7,
+         p <= 0.05) 
+```
+
+## Acut CRS/Protein ~ D10 cells
+ 
+### Fig. 7D
+* threshold __rho__ 0.7
+* threshold __p value__ 0.05 
+
+```{r}
+#mat <- corr.ab.output %>% 
+#  as.tibble() %>% 
+#  filter(grepl("CRS",Parameter1), grepl("Acute",Parameter1)) %>% 
+#  filter(grepl("Facs",Parameter2), grepl("D10",Parameter2))  %>% #grepl("D10|M1|M3|M6|Y1",Parameter2)) %>% 
+#  filter(Parameter1 != Parameter2) %>% 
+#  arrange(desc(abs(rho)),p) %>% 
+#  filter(p <= 0.05,
+#         abs(rho) > 0.7) %>% 
+  
+mat <- corr.ab.output.sig %>% 
+  select(Parameter1,Parameter2,rho,p)
+
+## define graph input
+vert <-  mat %>%
+  rename(x=Parameter1,
+         y=Parameter2,
+         r=rho) %>% 
+  select(x,y,r,p) %>% gather(item, node,x:y) %>%
+  group_by(node) %>% count(node) %>% 
+  mutate(to.split = node) %>% 
+  separate(to.split, sep="\\|", into=c("View","Time","feature"))
+
+graph_cors <- mat %>%
+  rename(x=Parameter1,
+         y=Parameter2,
+         r=rho) %>% 
+  select(x,y,r,p) %>% 
+  graph_from_data_frame(directed = FALSE, vert)
+
+
+## option 2 via layout
+layout <- create_layout(graph_cors, layout = 'igraph', algorithm = 'kk') #, algorithm = 'kk' #layout = "centrality",cent = graph.strength(graph_cors))#
+
+gg <- ggraph(layout) +
+  geom_edge_link(aes(edge_alpha = abs(r), 
+                     #edge_width = 1-p,
+                     color = r
+  ),
+  edge_width = 2) +
+  guides(edge_alpha = "none", edge_width = "none") +
+  #geom_edge_link0(aes(color = r, 
+  #                    edge_width = 1-p),
+  #                show.legend = F) +
+  geom_node_point(aes(color = Time,
+                      size = n),
+                  show.legend = T) +
+  guides(size = "none") +
+  scale_color_manual(values = TIME_colors) +
+  scale_edge_color_gradientn(limits = c(-1, 1), colors = c("#4575b4","#ffffbf","#d73027")) +
+  geom_node_text(aes(label = feature),
+                 size=10,
+                 repel = TRUE) +
+  theme_graph() +
+  scale_size(range = c(4,10)) +
+
+  labs(title = "Correlations of Acute IgG subclass response and D10 cells",
+       caption = "FDR < 0.05",
+       edge_color="Spearman rho")
+# ggsave(paste0("../plots/Acute_IgG_Subclass_D10cells_graph_fdr005.pdf"),gg, width = 10, height = 10)
+
+```
+
+### Fig. 7E
+#### Scatterplot
+
+```{r message=FALSE, warning=FALSE}
+## create folder
+scatter.fig.folder <- "/CorrelationScatter_wIgG/"
+ifelse(isFALSE(dir.exists(paste0("../plots",scatter.fig.folder))),
+       dir.create(paste0("../plots",scatter.fig.folder), recursive = TRUE),
+       paste0(scatter.fig.folder," Folder excists exists already!"))
+
+## loop to create scatterplots for significant correlations
+for(position in c(1:length(corr.ab.output.sig$Parameter1))){
+  selection <- corr.ab.output.sig %>% 
+    slice(position) %>% 
+    select(Parameter1,Parameter2) %>% unlist() %>% unname()
+  
+  statistic_annotation <- corr.ab.output.sig %>% slice(position)
+  
+  plot.input <- corr.ab.input %>% select(selection) %>% 
+    na.omit() %>% rownames_to_column("ID") %>% inner_join(subjectTable %>% select(ID,Endemic),by="ID") %>% column_to_rownames("ID")
+  
+  plot <- plot.input %>% 
+    ggplot(aes(x = .[,1], y = .[,2])) +
+    coord_flip() +
+    geom_point(aes(col=Endemic),
+               size=3, alpha = 0.7) + 
+    labs(x = paste(selection[1]),
+         y = paste0(selection[2])) +
+    geom_smooth(colour = "black", method = "lm", se = FALSE, alpha = 0.7) +
+    scale_color_manual(values=ENDEMIC_colors) +
+    labs(subtitle = paste0(" rho = ", round(statistic_annotation$rho, 2), #statistic_annotation$Method, 
+                           ", p.adj = ",round(statistic_annotation$p, 3),
+                           #", CI ",round(statistic_annotation$CI_low,2),"-",round(statistic_annotation$CI_high,2),
+                           ", n obs. = ",round(statistic_annotation$n_Obs, 3)))  +
+    theme_classic() +
+    theme12 +
+    theme(legend.position='none',
+          plot.subtitle=element_text(size=10, hjust=0.5, face="bold", color="black"))
+  
+#  ggsave(paste0("../plots",scatter.fig.folder,"CorrScatter_Rank",position,"_",selection[2],"_",selection[1],".pdf"),plot, width = 3.5, height = 3.5)
+  }
+
+```
+
+
+
+
+## =================
+## How does IgG4 correlates in previously exposed group?
+
+```{r message=FALSE, warning=FALSE}
+corr.ab.input.group <- corr.input %>% 
+  full_join(data.ab %>% 
+              mutate(feature = paste0("CRS","|",Time,"|",feature)) %>% 
+              select(ID,feature,value) %>% 
+              spread(feature,value),
+            by="ID") %>% 
+  select(ID,contains("Acute"),contains("D10")) %>% 
+  inner_join(subjectTable %>% select(ID,Endemic), by="ID") %>% 
+ filter(Endemic =="previously_exposed") %>% 
+  select(-Endemic) %>% 
+  column_to_rownames("ID")
+
+corr.ab.output.group <- correlation::correlation(data = corr.ab.input.group,
+                                           method = "spearman",
+                                           p_adjust = "fdr",
+                                           ci = 0.95,
+                                           redundant = F)
+
+
+corr.ab.output.group.sig <- corr.ab.output.group %>% 
+  as.tibble() %>% 
+  filter(grepl("CRS|Olink",Parameter1), grepl("Acute",Parameter1)) %>% 
+  #filter(grepl("Facs",Parameter2), grepl("D10",Parameter2)) %>% 
+  arrange(desc(abs(rho)),p) %>%
+  filter(abs(rho)>0.7) %>% 
+  filter(p <= 0.05) 
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+

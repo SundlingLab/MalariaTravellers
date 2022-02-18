@@ -1,0 +1,787 @@
+---
+title: "Systems Immunology Malaria Traveller Cohort"
+subtitle: "Internal & External Comparison"
+author: "Maximilian Julius Lautenbach"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output:
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: kate
+    code_folding: hide
+    df_print: paged
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/reports/")})
+---
+
+```{r setup, include=FALSE}
+result.dir <- paste0("../results/figures/")
+options(stringsAsFactors = FALSE) 
+```
+
+## required libraries
+```{r packages, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(viridis)
+library(ggpubr)
+library(rstatix)
+library(gridExtra)
+library(cowplot)
+library(RColorBrewer)
+source("helper_fun.R")
+```
+
+## load data
+
+```{r message=FALSE, warning=FALSE}
+mefisto.input <- readRDS("../data/MEFISTO_input_data.Rds")
+all.data <- readRDS("../data/ALL_input_data.Rds")
+
+facs.pkl.data <- read_csv("../data/TravellerCohort_FACS_log2pKlive_long.csv")
+facs.cpu.data <- read_csv("../data/TravellerCohort_FACS_log2cpu_long.csv")
+subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
+sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
+
+uniprot.keywords <- read.csv("../data/UniprotKeywordMapping.csv")
+wbc.data <- read_csv("../data/TravellerCohort_WBC_long.csv")
+protein.data.ctrl <- read_csv("../results/2021-08-23/2021-08-23_Olink_HC_data_QC.csv")
+facs.pkl.data.ctrl <- read_csv("../results/2021-08-23/2021-08-23_FACS_data_HC_selection.csv")
+
+mefisto.selection.proteins <- read_csv("../data/Top10_Proteins_F1.csv")
+mefisto.selection.cells <- read_csv("../data/Top10_Cells_F1.csv")
+```
+
+
+# == Internal comparison - Acute vs Convalescence == 
+
+```{r fig.show="hold", message=FALSE, warning=FALSE, out.width="50%"}
+input_temp <- all.data %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sample)),
+         ID = gsub("\\|.*","",sample)) 
+
+data_acute_conv <- input_temp %>% 
+  select(ID,view,Time,value,feature) %>% 
+  filter(Time == "Acute") %>% 
+  spread(Time,value) %>% 
+  full_join(input_temp %>% 
+              filter(Time %in% c("M6","Y1")) %>% 
+              group_by(ID, feature) %>%
+              summarise(Convalescence = mean(value)) %>% 
+              ungroup(), 
+            by=c("ID","feature")) %>% 
+  gather(Acute_Conv, value, -ID,-feature,-view) %>% 
+  inner_join(subjectTable,by="ID") %>%  
+  select(ID,Endemic, Acute_Conv, view,feature, value) %>% 
+  mutate(unite = ifelse(view == "Olink","NPX","cells per uL blood (log2)"),
+         Acute_Conv = factor(Acute_Conv, levels = c("Acute", "Convalescence")),
+         Endemic = factor(Endemic, levels = c("primary_infected","previously_exposed")))
+head(data_acute_conv)
+```
+
+## Figure Supplementary 2
+
+### Fig. S2D-E
+* Acute vs Convalscence top10
+* Normalise to a convalesecence median for both groups together
+
+#### Positive Factor1 values
+
+```{r message=FALSE, warning=FALSE}
+factor1_ordered_prot_pos <- mefisto.selection.proteins %>% 
+  arrange(desc(value)) %>% 
+  select(feature,value) %>%
+  head(10) %>% 
+  rename(factor1.value = value)
+
+medianConv <- data_acute_conv %>% 
+  filter(Acute_Conv == "Convalescence") %>% 
+  group_by(feature) %>% ## if Endemic add a few lines below too (right join)
+  summarise(ConvValue = median(value, na.rm = T)) %>% 
+  ungroup()
+
+ac_norm.data <- right_join(data_acute_conv, medianConv, by=c("feature")) %>% #"Endemic",
+  mutate(norm2ConvValue = value - ConvValue) %>% 
+  mutate(Acute_Conv = factor(Acute_Conv, levels = c("Acute","Convalescence"))) 
+
+## == Olink
+plot.data <- ac_norm.data %>% 
+  filter(view == "Olink") %>%
+  dplyr::select(ID,Endemic,Acute_Conv,view,feature,norm2ConvValue,unite)
+
+plot.data.ordered <-  factor1_ordered_prot_pos %>% 
+  inner_join(plot.data, by="feature")
+
+## ======== Acute vs Convalescence ====== ##
+stat.test <- plot.data.ordered %>%
+  group_by(feature) %>%
+  wilcox_test(norm2ConvValue ~ Acute_Conv, p.adjust.method = "fdr") %>%
+  adjust_pvalue() %>%
+  add_significance("p.adj") %>% 
+  inner_join(plot.data.ordered %>% select(feature,factor1.value) %>% distinct(), by="feature") %>% 
+  arrange(desc(factor1.value)) %>% 
+  add_xy_position(x="factor1.value")
+
+conv.norm <-
+  plot.data.ordered %>% 
+  ggplot(aes(x= fct_reorder(feature, factor1.value), y= norm2ConvValue)) + 
+  geom_hline(yintercept= 0, color = "grey20") +
+  geom_boxplot(aes(fill=Acute_Conv),
+               width = 1, 
+               position = position_dodge(1),
+               outlier.size = 0.2) +
+  scale_fill_manual(values = c("#ca5572","grey50")) +
+  labs(y = paste0(plot.data.ordered$unite," (normalized to convalescence median)"),
+       x = "",
+       title = "",
+       caption = "Wilcoxon Tests with FDR correction") +
+  theme_classic() +
+  coord_flip() +
+  theme_pubr() +
+  theme(legend.position = "bottom") +
+  stat_pvalue_manual(stat.test,
+                     label = "p.adj.signif", 
+                     y.position = min(plot.data.ordered$norm2ConvValue, na.rm = T)*1.1,
+                     remove.bracket = T) 
+(acute1.prot <- conv.norm)
+#conv.norm %>% ggsave(file = paste0(result.dir,"Olink_Factor1_positive_Top10_Conv_normalized.pdf"),  width = 6, height = 7, useDingbats = FALSE)
+
+## == Facs
+factor1_ordered_cells_pos <- mefisto.selection.cells %>% 
+  arrange(desc(value)) %>% 
+  select(feature,value) %>%
+  head(10) %>% 
+  rename(factor1.value = value) 
+
+plot.data <- ac_norm.data %>% 
+  filter(view == "Facs") %>%
+  dplyr::select(ID,Endemic,Acute_Conv,view,feature,norm2ConvValue,unite)
+
+
+plot.data.ordered <- factor1_ordered_cells_pos %>% 
+  inner_join(plot.data, by="feature")
+
+## ======== Acute vs Convalescence ====== ##
+stat.test <- plot.data.ordered %>%
+  group_by(feature) %>%
+  wilcox_test(norm2ConvValue ~ Acute_Conv, p.adjust.method = "fdr") %>%
+  adjust_pvalue() %>%
+  add_significance("p.adj") %>% 
+  inner_join(plot.data.ordered %>% select(feature,factor1.value) %>% distinct(), by="feature") %>% 
+  arrange(desc(factor1.value)) %>% 
+  add_xy_position(x="factor1.value")
+
+conv.norm <-
+  plot.data.ordered %>% 
+  ggplot(aes(x= fct_reorder(feature, factor1.value), y= norm2ConvValue)) + 
+  geom_hline(yintercept= 0, color = "grey20") +
+  geom_boxplot(aes(fill=Acute_Conv),
+               width = 1, 
+               position = position_dodge(1),
+               outlier.size = 0.2) +
+  scale_fill_manual(values = c("#ca5572","grey50")) +
+  labs(y = paste0(plot.data.ordered$unite," (normalized to convalescence median)"),
+       x = "",
+       title = "",
+       caption = "Wilcoxon Tests with FDR correction") +
+  theme_classic() +
+  coord_flip() +
+  theme_pubr() +
+  theme(legend.position = "bottom") +
+  stat_pvalue_manual(stat.test,
+                     label = "p.adj.signif", 
+                     y.position = min(plot.data.ordered$norm2ConvValue, na.rm = T)*1.1,
+                     remove.bracket = T) 
+(acute1.cell <- conv.norm)
+#conv.norm %>% ggsave(file = paste0(result.dir,"Facs_Factor1_positive_Top10_Conv_normalized.pdf"),  width = 8, height = 7, useDingbats = FALSE)
+
+```
+
+### Fig. S2F-G
+ Acute vs Convalscence top10
+* Normalise to a convalesecence median for both groups together
+
+#### Negative Factor1 values
+
+```{r message=TRUE, warning=FALSE}
+factor1_ordered_prot_neg <- mefisto.selection.proteins %>% 
+  arrange(value) %>% 
+  select(feature,value) %>%
+  head(10) %>% 
+  rename(factor1.value = value)
+
+medianConv <- data_acute_conv %>% 
+  filter(Acute_Conv == "Acute") %>% 
+  group_by(feature) %>% 
+  summarise(ConvValue = median(value, na.rm = T)) %>% 
+  ungroup()
+
+ac_norm.data <-  right_join(data_acute_conv, medianConv, by=c("feature")) %>% #"Endemic",
+  mutate(norm2ConvValue = value - ConvValue) %>% 
+  mutate(Acute_Conv = factor(Acute_Conv, levels = c("Acute","Convalescence"))) 
+
+## == Olink
+plot.data <- ac_norm.data %>% 
+  filter(view == "Olink") %>%
+  dplyr::select(ID,Endemic,Acute_Conv,view,feature,norm2ConvValue,unite)
+
+plot.data.ordered <-  factor1_ordered_prot_neg %>% 
+  inner_join(plot.data, by="feature")
+
+## ======== Acute vs Convalescence ====== ##
+stat.test <- plot.data.ordered %>%
+  group_by(feature) %>%
+  wilcox_test(norm2ConvValue ~ Acute_Conv, p.adjust.method = "fdr") %>%
+  adjust_pvalue() %>%
+  add_significance("p.adj") %>% 
+  inner_join(plot.data.ordered %>% select(feature,factor1.value) %>% distinct(), by="feature") %>% 
+  arrange(desc(abs(factor1.value))) %>% 
+  add_xy_position(x="factor1.value")
+
+conv.norm <-
+  plot.data.ordered %>% 
+  ggplot(aes(x= fct_reorder(feature, factor1.value), y= norm2ConvValue)) + 
+  geom_hline(yintercept= 0, color = "grey20") +
+  geom_boxplot(aes(fill=Acute_Conv),
+               width = 1, 
+               position = position_dodge(1),
+               outlier.size = 0.2) +
+  scale_fill_manual(values = c("#ca5572","grey50")) +
+  labs(y = paste0(plot.data.ordered$unite," (normalized to acute median)"),
+       x = "",
+       title = "",
+       caption = "Wilcoxon Tests with FDR correction") +
+  theme_classic() +
+  coord_flip() +
+  theme_pubr() +
+  theme(legend.position = "bottom") +
+  stat_pvalue_manual(stat.test,
+                     label = "p.adj.signif", 
+                     y.position = min(plot.data.ordered$norm2ConvValue, na.rm = T)*1.1,
+                     remove.bracket = T) 
+
+(conv1.prot <- conv.norm)
+#conv.norm %>% ggsave(file = paste0(result.dir,"Olink_Factor1_negative_Top10_Acute_normalized.pdf"),  width = 6, height = 7, useDingbats = FALSE)
+
+
+## Negative Factor1 values cells
+factor1_ordered_cells_neg <- mefisto.selection.cells %>% 
+  arrange(value) %>% 
+  select(feature,value) %>%
+  head(10) %>% 
+  rename(factor1.value = value) 
+
+plot.data <- ac_norm.data %>% 
+  filter(view == "Facs") %>%
+  dplyr::select(ID,Endemic,Acute_Conv,view,feature,norm2ConvValue,unite)
+
+
+plot.data.ordered <- factor1_ordered_cells_neg %>% 
+  inner_join(plot.data, by="feature") 
+
+## ======== Acute vs Convalescence ====== ##
+stat.test <- plot.data.ordered %>%
+  group_by(feature) %>%
+  wilcox_test(norm2ConvValue ~ Acute_Conv, p.adjust.method = "fdr") %>%
+  adjust_pvalue() %>%
+  add_significance("p.adj") %>% 
+  inner_join(plot.data.ordered %>% select(feature,factor1.value) %>% distinct(), by="feature") %>% 
+  arrange(desc(abs(factor1.value))) %>% 
+  add_xy_position(x="factor1.value")
+
+conv.norm <-
+  plot.data.ordered %>% 
+  ggplot(aes(x= fct_reorder(feature, factor1.value), y= norm2ConvValue)) + 
+  geom_hline(yintercept= 0, color = "grey20") +
+  geom_boxplot(aes(fill=Acute_Conv),
+               width = 1, 
+               position = position_dodge(1),
+               outlier.size = 0.2) +
+  scale_fill_manual(values = c("#ca5572","grey50")) +
+  labs(y = paste0(plot.data.ordered$unite," (normalized to acute median)"),
+       x = "",
+       title = "",
+       caption = "Wilcoxon Tests with FDR correction") +
+  theme_classic() +
+  coord_flip() +
+  theme_pubr() +
+  theme(legend.position = "bottom") +
+  stat_pvalue_manual(stat.test,
+                     label = "p.adj.signif", 
+                     y.position = min(plot.data.ordered$norm2ConvValue, na.rm = T)*1.1,
+                     remove.bracket = T) 
+(conv1.cell <- conv.norm)
+#conv.norm %>% ggsave(file = paste0(result.dir,"Facs_Factor1_negative_Top10_Acute_normalized.pdf"),  width = 8, height = 7, useDingbats = FALSE)
+```
+
+#### Uniprot kewords associated with proteins
+* Keywords assigned to proteins because they are involved in a particular biological process.
+
+```{r}
+acute.prot2 <- uniprot.keywords %>% 
+  right_join(factor1_ordered_prot_pos %>% 
+               rename(Protein = feature) , by="Protein") %>% 
+  filter(!keyword %in% c("Angiogenesis","Notch signaling pathway","Innate immunity")) %>% 
+  spread(keyword,status) %>% 
+  replace(is.na(.), 0) %>% 
+  #select(-'<NA>') %>% 
+  gather(keyword, status,-Protein,-factor1.value) %>%  
+  ggplot(aes(x = keyword, y = reorder(Protein,factor1.value), fill = as.factor(status))) +
+  geom_tile(color = "#ffffff") +
+  scale_fill_manual(values= c("lightgrey","#1B9E77")) +
+  theme_classic() +
+  coord_equal() +
+  theme_pubr() +
+  theme(axis.title = element_blank(),
+        legend.position = "none",
+        axis.text.x.top = element_text(angle = 45, hjust=0)) +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(position = "right") 
+
+acute.prot2 #%>% ggsave(file = paste0(result.dir,"Factor1_positive_Olink_UniProtKeywords_alternative.pdf"), width = 6, height = 7, useDingbats = FALSE)
+
+
+conv.prot2 <- uniprot.keywords %>% 
+  right_join(factor1_ordered_prot_neg %>% 
+               rename(Protein = feature) , by="Protein") %>% #distinct(Protein)
+  mutate(status = ifelse(is.na(keyword),0,status)) %>% 
+  spread(keyword,status) %>% 
+  replace(is.na(.), 0) %>% 
+  select(-'<NA>') %>% 
+  gather(keyword, status,-Protein,-factor1.value) %>%  
+  filter(!keyword %in% c(NA,"Notch signaling pathway","Innate immunity","Immunity")) %>% 
+  ggplot(aes(x = keyword, y = reorder(Protein,factor1.value), fill = as.factor(status))) +
+  geom_tile(color = "#ffffff") +
+  scale_fill_manual(values= c("lightgrey","#1B9E77")) +
+  theme_classic() +
+  coord_equal() +
+  theme_pubr() +
+  theme(axis.title = element_blank(),
+        legend.position = "none",
+        axis.text.x.top = element_text(angle = 45, hjust=0)) +
+  scale_x_discrete(position = "top") +
+  scale_y_discrete(position = "right") 
+conv.prot2# %>% ggsave(file = paste0(result.dir,"Factor1_negative_Olink_UniProtKeywords_alternative.pdf"), width = 6, height = 7, useDingbats = FALSE)
+```
+
+#### scoring cells based on their markers
+
+```{r message=FALSE, warning=FALSE}
+cell.activation <- mefisto.selection.cells %>% 
+  select(feature) %>% 
+  mutate(Activation = ifelse(grepl("CD38\\+HLADR\\+",feature),"yes",
+                             ifelse(grepl("CD38\\+",feature),"yes","no")),
+         Proliferation = ifelse(grepl("CD38\\+HLADR\\+",feature),"yes","no"),
+         Differentiation = ifelse(grepl("Non-classical", feature),"yes",
+                                  ifelse(grepl("Temra", feature),"yes","no")),
+         Exhaustion = ifelse(grepl("CD56-CD16+", feature),"yes",
+                             ifelse(grepl("CD8+CD57+", feature),"yes",
+                                    ifelse(grepl("CD8+CD57+ Temra",feature), "yes", "no")))) %>% 
+  gather(status.lab, status,-feature)
+
+cell.activation.plot <- function(arranged_data){
+  arranged_data %>% 
+    inner_join(cell.activation, by="feature") %>% 
+    ggplot(aes(x = status.lab, y = reorder(feature, factor1.value), fill = as.factor(status))) +
+    geom_tile(color = "#ffffff") +
+    scale_fill_manual(values= c("lightgrey","#7570B3" )) +
+    theme_classic() +
+    coord_equal() +
+    theme_pubr() +
+    theme(axis.title = element_blank(),
+          legend.position = "none",
+          axis.text.x.top = element_text(angle = 45, hjust=0)) +
+    scale_x_discrete(position = "top") +
+    scale_y_discrete(position = "right")
+}
+
+acute.cell2 <- factor1_ordered_cells_pos %>% 
+  cell.activation.plot()  
+acute.cell2 #%>% ggsave(file = paste0(result.dir,"Factor1_positive_Facs_CellstatusKeywords_alternative.pdf"), width = 6, height = 7, useDingbats = FALSE)
+
+
+conv.cell2 <- factor1_ordered_cells_neg %>% 
+  cell.activation.plot() 
+
+conv.cell2 #%>% ggsave(file = paste0(result.dir,"Factor1_negative_Facs_CellstatusKeywords_alternative.pdf"), width = 6, height = 7, useDingbats = FALSE)
+```
+
+
+```{r}
+library(patchwork)
+theme_complex <- theme(axis.text.y = element_blank(),
+                       axis.ticks.y = element_blank(), 
+                       axis.title.x = element_blank(),
+                       axis.title.y = element_blank())
+change.xy <- theme(axis.text.x = element_text(size = 5),
+                  axis.text.y = element_text(size = 5))
+
+
+#pdf("../plots/InternalComp_panel.pdf", width = 7,height = 3.5,useDingbats = F, title="Supplementary", paper = "a4", compress = T, ) #colormodel = "cmyk"
+#par(mfrow = c(2,2))
+
+acute1.cell + theme_figpanel + change.xy | acute.cell2 + theme_figpanel + change.xy + theme_complex  | acute1.prot + theme_figpanel + change.xy | acute.prot2 + theme_figpanel + change.xy + theme_complex 
+
+conv1.cell + theme_figpanel + change.xy | conv.cell2 + theme_figpanel + change.xy + theme_complex | conv1.prot + theme_figpanel+ change.xy  | conv.prot2 + theme_figpanel + change.xy + theme_complex
+
+#dev.off()
+```
+
+
+# == External comparison - Cohort vs Healthy Controls ==
+
+## Supplementary Figure S3
+* Immune cell abundance and plasma protein abundance compared to healthy controls
+* Immune cell abundance based on cells/1000 live cell counts
+* for each sample time point
+
+
+```{r}
+HC_protein.data <- protein.data.ctrl %>% 
+  mutate(ID = gsub("_","",ID),
+         view = Omics,
+         group = "Ctrl",
+         Acute_Conv = "Ctrl",
+         unite = "NPX") %>% 
+  dplyr::select(ID,group,Acute_Conv,view,feature,value,unite)
+
+## Nonendemic_Endemic_Control data 
+NEC <- bind_rows(HC_protein.data, data_acute_conv) %>%
+  filter(view == "Olink") %>% 
+  mutate(group = as.factor(group),
+         Acute_Conv = as.factor(Acute_Conv)) %>% 
+  mutate(group = factor(group, levels = c("primary_infected","previously_exposed","Ctrl")))
+
+```
+
+
+##### Data prep Immune cells
+
+```{r}
+## cohort data
+
+Endemic_cell_data <- facs.pkl.data %>% 
+  rename(view = Omics) %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sampleID)),
+         ID = gsub("\\|.*","",sampleID))  %>% 
+  select(ID,view,Time,value,feature) %>% 
+  inner_join(subjectTable, by="ID") %>% 
+  select(ID,Endemic, Time, view, feature, value) %>% 
+  mutate(#unite = ifelse(view == "Olink","NPX","cells per uL blood (log2)"),
+         Endemic = factor(Endemic, levels = c("primary_infected","previously_exposed"))) %>% 
+  mutate_if(is.character,
+            stri_trans_general,
+            id = "latin-ascii")
+
+## calculate median of healthy ctrl
+HC_cell.data <- facs.pkl.data.ctrl %>% 
+  filter(gate != "id") %>% 
+  mutate(ID = gsub("_","",sampleID),
+         feature = gate.lab,
+         view = "Facs",
+         Endemic = "Ctrl",
+         Time = "Ctrl",
+         unite = "pkl") %>% 
+  dplyr::select(ID,Endemic,Time,view,feature,value,unite) %>% 
+  mutate(log.value = log(value),
+         log2.value = log2(value +1),
+         log10.value = log10(value)) %>% 
+  select(ID,Endemic,Time,view,feature,log2.value) %>% 
+  rename(value=log2.value) %>% 
+  mutate_if(is.character,
+            stri_trans_general,
+            id = "latin-ascii")
+  
+
+NEC.cell <- rbind(Endemic_cell_data, HC_cell.data) %>%
+  filter(view == "Facs") %>% 
+  mutate(Endemic = as.factor(Endemic),
+         Time = as.factor(Time)) %>% 
+  mutate(Endemic = factor(Endemic, levels = c("primary_infected","previously_exposed","Ctrl")))
+
+## join ctrl medians with patient data
+cell.data.hc.normalized <- NEC.cell %>% 
+  full_join(NEC.cell %>% 
+              filter(Time == "Ctrl") %>%
+              group_by(feature) %>% 
+              summarise(hcpkl = median(value, na.rm = T)), # healthy control per k (1000) live cells
+            by = "feature") %>% 
+  mutate(HealthyInf = as.factor(ifelse(Endemic == "Ctrl","Healthy","Malaria infected"))) %>% 
+  mutate(norm2hcpkl = value - hcpkl) %>% 
+  mutate_if(is.character,
+            stri_trans_general,
+            id = "latin-ascii")
+
+feature.cell.order.acute <- cell.data.hc.normalized %>% 
+  filter(Time == "Acute") %>% 
+  filter(HealthyInf == "Malaria infected") %>% 
+  group_by(feature) %>% 
+  summarise(order.median.acute = median(norm2hcpkl)) %>% 
+  ungroup() %>% 
+  arrange(desc(order.median.acute)) %>% 
+  select(feature, order.median.acute)
+```
+
+##### Data prep plasma proteins
+
+```{r}
+## cohort data
+Endemic_protein.data <- all.data %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sample)),
+         ID = gsub("\\|.*","",sample))  %>% 
+  rename(Endemic = group) %>% 
+  #select(ID,view,Time,value,feature) %>% 
+  #inner_join(subjectTable,by="ID") %>% 
+  select(ID,Endemic, Time, view, feature, value) %>% 
+  mutate(unite = ifelse(view == "Olink","NPX","cells per uL blood (log2)"),
+         Endemic = factor(Endemic, levels = c("primary_infected","previously_exposed")))
+
+## calculate median of healthy ctrl
+HC_protein.data <- protein.data.ctrl %>% 
+  mutate(ID = gsub("_","",ID),
+         view = Omics,
+         Endemic = "Ctrl",
+         Time = "Ctrl",
+         unite = "NPX") %>% 
+  dplyr::select(ID,Endemic,Time,view,feature,value,unite)
+
+## join cohort and healthy control data
+NEC <- rbind(Endemic_protein.data, HC_protein.data) %>%
+  filter(view == "Olink") %>% 
+  mutate(Endemic = as.factor(Endemic),
+         Time = as.factor(Time)) %>% 
+  mutate(Endemic = factor(Endemic, levels = c("primary_infected","previously_exposed","Ctrl")))
+
+## join ctrl medians with patient data
+protein.data.hc.normalized <- NEC %>% 
+  full_join(NEC %>% 
+              filter(Time == "Ctrl") %>%
+              group_by(feature) %>% 
+              summarise(hcNPX = median(value)) %>% 
+              ungroup(),
+            by = "feature") %>% 
+  mutate(HealthyInf = as.factor(ifelse(Endemic == "Ctrl","Healthy","Malaria infected"))) %>% 
+  mutate(norm2hcNPX = value - hcNPX) 
+
+## order proteins based on median acute value in cohort
+feature.protein.order.acute <- protein.data.hc.normalized %>% 
+  filter(Time == "Acute") %>% 
+  filter(HealthyInf == "Malaria infected") %>% 
+  group_by(feature) %>% 
+  summarise(order.median.acute = median(norm2hcNPX)) %>% 
+  ungroup() %>% 
+  arrange(desc(order.median.acute)) %>% 
+  select(feature, order.median.acute) %>% 
+  rownames_to_column("acute_order")
+
+
+## calculate median of healthy ctrl
+HC_cell.data <- facs.pkl.data.ctrl %>% 
+  filter(gate != "id") %>% 
+  mutate(ID = gsub("_","",sampleID),
+         feature = gate.lab,
+         view = "Facs",
+         Endemic = "Ctrl",
+         Time = "Ctrl",
+         unite = "pkl") %>% 
+  dplyr::select(ID,Endemic,Time,view,feature,value,unite) %>% 
+  mutate(log.value = log(value),
+         log2.value = log2(value +1),
+         log10.value = log10(value)) %>% 
+  select(ID,Endemic,Time,view,feature,log2.value) %>% 
+  rename(value=log2.value) %>% 
+  mutate_if(is.character,
+            stri_trans_general,
+            id = "latin-ascii")
+
+```
+
+
+```{r }
+ifelse(isFALSE(dir.exists(paste0(result.dir,"/Cohort_vs_HealthyCtrl/"))), dir.create(paste0(result.dir,"/Cohort_vs_HealthyCtrl/"),recursive = TRUE),"HealthyCtrl Folder excists exists already!")
+```
+
+### Fig. S3A-D
+* manuscript included only sample time points Acute and Y1
+
+#### Immune cells
+
+```{r }
+for(TimePoint in c("Acute","D10","M1","M3","M6","Y1")){
+  plot.data <- cell.data.hc.normalized %>%  
+    filter(Time %in% c("Ctrl",TimePoint))
+  
+  plot.data.ordered <- feature.cell.order.acute %>%
+    right_join(plot.data, by="feature")
+  
+  ## ======== Healthy vs Infected ====== ##
+  stat.test <- plot.data.ordered %>%
+    group_by(feature) %>%
+    wilcox_test(norm2hcpkl ~ HealthyInf, p.adjust.method = "fdr") %>%
+    adjust_pvalue() %>%
+    add_significance("p.adj") %>% 
+    inner_join(feature.cell.order.acute %>% select(feature,order.median.acute) %>% distinct(), by="feature") %>% 
+    arrange(desc(order.median.acute)) %>% 
+    add_xy_position(x="order.median.acute")
+  
+ # write.csv(stat.test %>% mutate(groups = as.character(groups)), paste0(result.dir,"Cohort_vs_HealthyCtrl/Facs_",TimePoint,"_HC_normalized.csv"))
+  
+  hc.norm <-
+    plot.data.ordered %>% 
+    ggplot(aes(x= fct_reorder(feature, order.median.acute), y= norm2hcpkl)) + 
+    geom_hline(yintercept= 0, color = "grey20") +
+    geom_boxplot(aes(fill=HealthyInf),
+                 width = 1, 
+                 position = position_dodge(1),
+                 outlier.size = 0.2) +
+    scale_fill_manual(values = c("grey50","#ca5572")) +
+    labs(y = "cells/1000 live cells [log2] (normalized to healthy median)",
+         x = "",
+         title = TimePoint,
+         caption = "Wilcoxon Tests with FDR correction") +
+    theme_classic() +
+    coord_flip() +
+    theme_pubr() +
+    theme(legend.position = "bottom") +
+    stat_pvalue_manual(stat.test,
+                       label = "p.adj.signif", 
+                       y.position = min(plot.data.ordered$norm2hcpkl, na.rm = T)*1.05,
+                       remove.bracket = T) 
+  
+  hc.norm# %>% ggsave(file = paste0(result.dir,"Cohort_vs_HealthyCtrl/Facs_",TimePoint,"_HC_normalized.pdf"), width = 6, height = 16, useDingbats = FALSE)
+  
+}
+```
+
+#### Plasma proteins
+
+```{r}
+for(TimePoint in c("Acute","D10","M1","M3","M6","Y1")){
+  plot.data <- protein.data.hc.normalized %>%  
+    filter(Time %in% c("Ctrl",TimePoint))
+  
+  plot.data.ordered <- feature.protein.order.acute %>%
+    right_join(plot.data, by="feature")
+  
+  ## ======== Healthy vs Infected ====== ##
+  stat.test <- plot.data.ordered %>%
+    group_by(feature) %>%
+    wilcox_test(norm2hcNPX ~ HealthyInf, p.adjust.method = "fdr") %>%
+    adjust_pvalue() %>%
+    add_significance("p.adj") %>% 
+    inner_join(feature.protein.order.acute %>% select(feature,order.median.acute) %>% distinct(), by="feature") %>% 
+    arrange(desc(order.median.acute)) %>% 
+    add_xy_position(x="order.median.acute")
+  
+  #write.csv(stat.test %>% mutate(groups = as.character(groups)), paste0(result.dir,"Cohort_vs_HealthyCtrl/Olink_",TimePoint,"_HC_normalized.csv"))
+  
+  hc.norm <-
+    plot.data.ordered %>% 
+    ggplot(aes(x= fct_reorder(feature, order.median.acute), y= norm2hcNPX)) + 
+    geom_hline(yintercept= 0, color = "grey20") +
+    geom_boxplot(aes(fill=HealthyInf),
+                 width = 1, 
+                 position = position_dodge(1),
+                 outlier.size = 0.2) +
+    scale_fill_manual(values = c("grey50","#ca5572")) +
+    labs(y = "NPX (normalized to healthy median)",
+         x = "",
+         title = TimePoint,
+         caption = "Wilcoxon Tests with FDR correction") +
+    theme_classic() +
+    coord_flip() +
+    theme_pubr() +
+    theme(legend.position = "bottom") +
+    stat_pvalue_manual(stat.test,
+                       label = "p.adj.signif", 
+                       y.position = min(plot.data.ordered$norm2hcNPX, na.rm = T)*1.05,
+                       remove.bracket = T) 
+  hc.norm #%>% ggsave(file = paste0(result.dir,"Cohort_vs_HealthyCtrl/Olink_",TimePoint,"_HC_normalized.pdf"), width = 6, height = 16, useDingbats = FALSE)
+}
+```
+
+
+# == Clinical chemistry data ==
+
+## Figure Supplementary 1
+
+### Fig. S1C
+
+```{r}
+plot.input <- wbc.data %>% 
+  mutate(Time=as.factor(Time)) %>% 
+  select(sampleID,ID,Time,lpk,lymf,mono) %>% 
+  gather(feature,value,lpk:mono) 
+
+feature.labs <- c("Lymphocytes/1000 counts", "Lymphocytes", "Monocytes")
+names(feature.labs) <- c("lpk", "lymf", "mono")
+
+(pA <- plot.input %>% 
+  ggplot(aes(x=Time, y=value, group=feature))+
+  facet_wrap(~feature, ncol = 3, scales = "free_y",
+             labeller = labeller(feature = feature.labs)) +
+  geom_smooth(method="loess", color = "#6097ce") +
+  labs(x = "Sample time point",
+       y = "Cell count") +
+   jtools::theme_nice() +
+  theme_figpanel+
+   theme(legend.position = "none",
+         legend.key.size = unit(2, "cm"))
+         )
+```
+
+### Fig. S1D
+* cells/1000 live cell counts correlated with wbc-standardised cells per ul
+
+```{r fig.asp=0.29, message=FALSE, warning=FALSE}
+plot.input <- facs.pkl.data2 %>% 
+  filter(value != "-Inf") %>% 
+  mutate(rowname = paste(sampleID,"|",feature)) %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sampleID))) %>% 
+  select(rowname,value,Time) %>% rename("log2[cells per 1000 live]"=value) %>% 
+  inner_join(facs.cpu.data %>% 
+      mutate(rowname = paste(sampleID,"|",feature)) %>%
+      select(rowname,value) %>% 
+      filter(value != "-Inf") %>% 
+      rename("log2[cells per ul]"=value),
+    by="rowname") %>% 
+  mutate(feature = gsub(".*\\|","",rowname),
+         ID = gsub("\\|.*","",rowname))
+
+(pB <- plot.input %>% 
+    ggplot(aes(x=`log2[cells per 1000 live]`,y=`log2[cells per ul]`,color=Time)) +
+    geom_point(alpha=0.5,size=0.5) +
+    facet_wrap(~Time, ncol = 6) +
+    stat_smooth(color="black",
+                method = "lm",size=0.5,
+                se = T,
+                fullrange = T,
+                alpha = 0.6) +
+    stat_cor(aes(label = paste0("R = ", ..r..)),size=2,
+             col="black",
+             method = "spearman", 
+             label.sep="\n", 
+             output.type = "latex",
+             hjust = 0,
+             show.legend = F) +
+    scale_color_manual(values=TIME_colors) +
+    jtools::theme_nice() +
+    theme_figpanel+
+    theme(legend.position = "none",
+          panel.spacing.x=unit(0.5, "lines"),
+          legend.key.size = unit(2, "cm"))
+  )
+
+```
+
+```{r}
+#pdf("../plots/WBC_Corr_FigS1CD_revision_feb7.pdf", width = 6,height = 3, useDingbats = F,   title="main", paper = "a4", compress = T ) 
+pA / pB 
+#dev.off()#
+```
+

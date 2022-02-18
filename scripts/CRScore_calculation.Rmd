@@ -1,0 +1,200 @@
+---
+title: "Systems Immunology Malaria Traveller Cohort"
+subtitle: "Data re-purposing of study by Yman et al. 2019"
+author: "Maximilian Julius Lautenbach"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output:
+  rmarkdown::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: kate
+    code_folding: hide
+    df_print: paged
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/reports/")})
+---
+
+```{r setup, include=FALSE}
+result.dir <- paste0("../results/figures/")
+options(stringsAsFactors = FALSE) 
+```
+
+
+## required libraries
+```{r message=FALSE}
+library(tidyverse)
+library(readxl)
+source("helper_fun.R")
+```
+
+# Preparation
+
+### load data 
+```{r message=FALSE, warning=FALSE}
+ab.data.raw <- read_csv("../data/YmanEtAl2019_adj_lev_raw_data.csv")
+subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
+sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
+ID.list <- read_csv("../../Mefisto/data/PatientIDs_includedinMofaModel.csv") %>% rename(subjectID = "x") %>% pull(subjectID)
+```
+
+### rank normalise data
+
+```{r}
+ab.norm <- ab.data.raw %>% 
+  group_by(igg,antigen) %>% 
+  mutate(rnorm.value = rank_norm_fun(adj_lev_raw),
+         zscore = scale(rnorm.value)) %>% 
+  ungroup()
+```
+
+### wrangel data
+
+```{r}
+ab.norm <- ab.norm %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sampleID)),
+         subjectID = gsub("\\|.*","",sampleID)) %>% 
+  rename(IgG_class = igg,
+         antigen_full = antigen) %>% 
+  mutate(
+    ## unique antigens
+    antigen = ifelse(grepl("AMA1", antigen_full),"AMA1",
+                     ifelse(grepl("MSP1", antigen_full),"MSP1",
+                            ifelse(grepl("MSP2", antigen_full),"MSP2",
+                                   ifelse(grepl("MSP3", antigen_full),"MSP3",
+                                          ifelse(grepl("RH5", antigen_full),"RH5",
+                                                 ifelse(grepl("Schizont", antigen_full),"Schizont",
+                                                        ifelse(grepl("TTd", antigen_full),"TTd",antigen_full))))))),
+    cat = ifelse(antigen == "TTd","ctrl.antigen","test.antigen"),
+    include_in_ic_sum = ifelse(antigen == "TTd",F,
+                               ifelse(antigen == "Schizont",F,T)))
+```
+
+
+### calculate Cummulative Response Score (CRS)
+* sum of rank-normalized values per Individual, Time point and IgG class
+* range normalization for values between 0 and 1
+
+```{r}
+ab.norm.out <- ab.norm %>% 
+  filter(cat == "test.antigen") %>% ## filter out control antigen TTd 
+  filter(include_in_ic_sum == T) %>% 
+  group_by(subjectID,Time, IgG_class) %>% 
+  summarise(n = n(),
+            ic.sum = sum(zscore)) %>% 
+  ungroup() %>% 
+  na.omit() %>% 
+  group_by(IgG_class) %>% 
+  mutate(ic.sum = range01(ic.sum)) %>% 
+  ungroup() %>% 
+  mutate(sampleID = paste0(subjectID,"|",Time)) %>% 
+  rename(value = ic.sum,
+         feature = IgG_class) %>% 
+  dplyr::select(sampleID,feature,value) %>% 
+  mutate(Omics = "Antibody",
+         unite = "IgG class [sum of zscores]") %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sampleID)),
+         ID = gsub("\\|.*","",sampleID)) 
+
+## save data for further analysis
+#write.csv(ab.norm.out, paste0("../data/TravellerCohort_IgGclass_long.csv"), row.names = FALSE)
+```
+```{r fig.asp=1}
+(qc.plot <- ab.norm %>% 
+   filter(cat == "test.antigen",
+          antigen != "Schizont") %>% 
+   ggplot(aes(x=rnorm.value, fill= antigen_full)) +
+   geom_density(alpha=.3) +
+   facet_grid(antigen ~ IgG_class,cols = ,scales = "free_y") +
+   labs(x="rank normalized value",
+        fill = "") +
+   geom_vline(xintercept=0,
+              linetype="dashed",
+              size=1, colour="red") +
+   theme(legend.position = "top") +
+   jtools::theme_nice() +
+   theme_figpanel +
+   theme(legend.position = "top",
+         panel.spacing.y=unit(0.5, "lines"),
+         panel.spacing.x=unit(0.5, "lines")))
+```
+
+
+
+## Figure 7
+
+### Fig. 7A
+* Plot CRS over time
+* requires function **longitudinal_timepoint_plot()** from ```helper_fun.R```
+
+```{r fig.asp=0.2}
+source("../scripts/helper_fun.R")
+p1 <- ab.norm.out %>% 
+    inner_join(subjectTable %>% select(ID,Endemic), by="ID") %>% 
+    filter(ID %in% ID.list) %>% 
+    rename(group = Endemic) %>% 
+    longitudinal_timepoint_plot() +
+    facet_wrap(~feature, ncol = 5) + 
+    labs(y="Scaled IgG subclass \n response score",
+         subtitle = "Cumulative response to multiple blood stage antigens") +
+    scale_y_continuous(limits=c(0,1)) +
+    jtools::theme_nice() +
+    theme_figpanel +
+    theme(legend.position = "none",
+          plot.subtitle = element_text(size=6),
+          axis.title.y = element_text(vjust = -3),
+          panel.spacing.x=unit(0.5, "lines"))
+#pdf("../plots/CRS_overtime_revision_feb15.pdf", width = 5.25,height = 1.5, useDingbats = F,   title="main", paper = "a4", compress = T ) 
+p1 
+#dev.off()#
+
+```
+
+
+### Fig. S7A
+### qc plot 
+* normal distribution required for subsequent cumulative score calculation
+
+
+```{r fig.asp=1}
+#pdf("../plots/IgGsubclassRespAntigens_QC_revision_feb7.pdf", width = 4,height = 4, useDingbats = F,   title="main", paper = "a4", compress = T ) 
+qc.plot 
+#dev.off()
+```
+### Fig. S7B 
+
+```{r fig.asp=0.5}
+(p1 <- ab.norm.out %>% 
+   inner_join(subjectTable %>% select(ID,Endemic), by="ID") %>% 
+   filter(ID %in% ID.list) %>% 
+   ggplot(aes(x = Time, y = value, color=Endemic, fill = Endemic , group = interaction(Time,Endemic)))+
+   geom_boxplot(position = position_dodge(1), alpha = 6/10, color="grey20",outlier.size = 0.5,
+                width=0.5) +
+   geom_dotplot(binaxis='y', 
+                stackdir='center',
+                dotsize = 0.2,
+                alpha = 3/10,
+                show.legend = F,
+                position = position_dodge(1)) +
+   scale_fill_manual(values=ENDEMIC_colors) +
+   scale_color_manual(values=ENDEMIC_colors) +
+   jtools::theme_nice() +
+   facet_wrap(~feature,ncol = 5) +
+   labs(x="Sample Time Points",
+        y="Scaled IgG subclass \n response score") +
+   jtools::theme_nice() +
+   theme_figpanel +
+   theme(panel.spacing.x=unit(0.5, "lines"),
+         legend.position = "bottom",
+         axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5)))
+
+#pdf("../plots/IgGsubclassRespAntigens_s5_revision_feb7.pdf", width = 6,height = 3, useDingbats = F,   title="main", paper = "a4", compress = T ) 
+p1 
+#dev.off()
+```
+

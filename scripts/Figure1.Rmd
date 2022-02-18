@@ -1,0 +1,211 @@
+---
+title: "Systems Immunology Malaria Traveller Cohort"
+subtitle: "Figure 1"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: pygments
+abstract: Short project description.
+knit: (function(inputFile, encoding) {
+          rmarkdown::render(inputFile,
+                            encoding = encoding, 
+                            output_file = paste0(
+                              xfun::sans_ext(inputFile), '_', Sys.Date(), '.html'),
+                                output_dir = "../results/")})
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(echo = TRUE, root.dir = getwd(), fig.width = 6, fig.height = 5, warning = FALSE, message = FALSE)
+result.dir <- paste0("results/figures/")
+options(stringsAsFactors = FALSE) 
+```
+
+## required libraries
+```{r message=FALSE, include=FALSE}
+library(tidyverse)
+library(readxl)
+library(lme4)
+library(interactions)
+library(lmerTest)
+library(ggbeeswarm)
+source("helper_fun.R")
+```
+
+# Preparation
+
+### load data 
+```{r message=FALSE, warning=FALSE}
+time.after.onset <- read_csv("../data/Cohort_overview_input.csv")
+subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
+sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
+```
+
+## Figure 1
+### Fig. 1B
+* Cohort sample time line
+
+```{r}
+time.after.onset <- sampleTable %>% 
+  mutate(Time = as.factor(gsub(".*\\|","",sampleID)),  
+         ID = gsub("\\|.*","",sampleID)) %>% 
+  select(ID,Time,days.po) %>% 
+  spread(Time,days.po) %>% ## sample time points relative to symptom onset
+    mutate(Acute_start = 0) %>% 
+  gather(event,day,2:ncol(.)) %>% 
+ inner_join(subjectTable %>% 
+              select(ID,days_adm,Endemic,date_spt_current,date_acute_sample) %>%
+              mutate(Onset = round(difftime(date_spt_current, date_acute_sample, units ="day"))) %>% ## time between symptom onset and acute sample
+              select(-date_spt_current,-date_acute_sample) %>% 
+              mutate(Onset = as.numeric(Onset)) %>% 
+              mutate(Onset = ifelse(ID == "2014003", -7,Onset)),
+            by="ID") %>% 
+  spread(event,day) %>% 
+  select(-Acute) %>% 
+  rename(Acute = Acute_start) %>% 
+  gather(event,day,4:ncol(.)) %>% 
+  arrange(day) %>% 
+  #mutate(Admission = 0) %>% 
+  mutate(START = 0) %>% 
+  mutate(event = factor(event, levels = c("Onset", "Acute", "D10", "M1", "M3", "M6", "Y1"))) %>% 
+  # adding convalescence stripe
+  mutate(Conv = ifelse(event %in% c("M6","Y1"), "Convalescence", NA)) %>% 
+  mutate(Endemic = factor(as.factor(Endemic), levels = c("primary_infected", "previously_exposed")))
+```
+
+
+```{r message=FALSE, warning=FALSE}
+####################
+group_sizes <- time.after.onset %>% 
+  group_by(Endemic) %>% 
+  distinct(ID) %>%
+  count(Endemic) %>% 
+  mutate(new = paste0(gsub("_"," ",Endemic), "\n n=", n)) %>% 
+  select(-n) %>% 
+  as.tibble() %>%
+  deframe()
+#####################
+
+(overview.fig <- ggplot() +
+    coord_flip() +
+    geom_linerange(data = time.after.onset %>% filter(Conv == "Convalescence") %>% distinct() %>% group_by(ID) %>% spread(event,day),
+                   aes(x = ID, ymin = M6, ymax = Y1), col="#b8e186",alpha = .3, size=1.5) +
+    ## Time points
+    geom_point(data = time.after.onset, aes(x=ID, y = day, col=event), size = 3) +
+    geom_point(data = time.after.onset %>% filter(!event %in% c("Onset", "Admission")), aes(x=ID, y = day),col="black", shape = 4, size = 2) +
+    scale_y_continuous(breaks = c(-10,-5,0,10,30,90,180,365)) +
+    facet_grid(Endemic ~ ., 
+               scales = "free",
+               space = "free",
+               labeller = labeller(Endemic = group_sizes)) +
+    theme(text = element_text(size=20),
+          strip.text.y = element_text(angle = 0),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1,size=9),
+          legend.position="top",
+          panel.background = element_rect(fill = "white", colour = "grey50")) +
+    labs(title = "Cohort overview",
+         subtitle = paste0('# of patients included: ',length(unique(time.after.onset$ID))),
+         y = "Time relative to Acute Sample (days)",
+         color = "") +
+    guides(colour = guide_legend(nrow = 1)) +
+    scale_color_manual(values = c("Onset" = "gray15", 
+                                  setNames(brewer.pal(6,"PiYG"), c("Acute","D10","M1","M3","M6","Y1"))),
+                       labels = c("Onset",
+                                  #"Admission",
+                                  "Acute","D10","M1","M3","M6","Y1")) +
+    scale_shape_manual(labels = c("Onset",
+                                  "Acute","D10","M1","M3","M6","Y1"),
+                       guide = "none") 
+                       )
+#ggsave(paste0("../plots/Traveller_Cohort_Overview_revision.pdf"),overview.fig, width = 10, height = 8)
+
+```
+
+```{r}
+## wrangling
+time.after.onset %>% inner_join(subjectTable %>% select(ID,PreAcute),by="ID") %>% 
+  mutate(Acute_start =)
+```
+
+
+### Fig. 1D
+* parasitemia
+```{r message=F, warning=F}
+plot.input <- subjectTable %>% 
+  filter(ID %in% time.after.onset$ID) %>% 
+  select(ID,days_adm, inf_rbc,Endemic) %>% 
+  rename(Parasitemia = inf_rbc) %>% 
+  gather(feature,value,-ID,-Endemic) %>% 
+  mutate(Endemic = as.factor(factor(Endemic, levels = c("primary_infected", "previously_exposed"))))
+
+stat.test <- plot.input %>% 
+  group_by(feature) %>% 
+  wilcox_test(value ~ Endemic) %>%
+  add_significance() %>%
+  add_xy_position(x = "Endemic", 
+                  dodge = 0.8) 
+
+plot.input %>% 
+  group_by(feature, Endemic) %>% summarise(median(value))
+
+plot.input %>%
+  filter(feature == "Parasitemia") %>% 
+  ggplot(aes(x=Endemic, y= value,fill=Endemic)) +
+  geom_boxplot(outlier.size = 0.2, width=0.4,alpha=0.6) +
+  scale_y_continuous(trans = 'log2',breaks = c(0,0.1,0.5, 1, 2, 4,8,16)) +
+  geom_point(pch = 21, alpha=0.9, position = position_jitterdodge()) +
+  scale_fill_manual(values= ENDEMIC_colors) +
+  stat_pvalue_manual(stat.test %>% filter(feature=="Parasitemia"),
+                     size = 7,
+                     y.position = 5,
+                     bracket.size = 0.8, #label = "p.adj.signif", tip.length = 0.01,
+                     hide.ns = T,
+                     inherit.aes = FALSE) +
+  theme(legend.position = "none") +
+  labs(x = "",
+       y = "iRBC (%)",
+       subtitle = "Parasitemia",
+       caption = "Wilcox test") +
+  jtools::theme_nice() +
+  theme12 +
+  theme(legend.position='none') #+
+#ggsave(paste0("../",result.dir,"Parasitemia.pdf"), width = 4,height = 4)
+```
+
+### Fig. 1E
+* hospitalization
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+plot.input %>%
+  filter(feature == "days_adm") %>% 
+  ggplot(aes(x= reorder(Endemic, desc(Endemic)), y= value,fill=Endemic))+
+  scale_y_continuous(trans = 'log2',
+                     breaks = c(1, 2, 4,8,16,32)) +
+  geom_violin(trim = F,alpha=0.8) +
+  geom_boxplot(outlier.size = 0.0, width=0.3,alpha=0.6) +
+  geom_jitter(width = 0.1, alpha=0.9)+
+  scale_fill_manual(values= ENDEMIC_colors) +
+  stat_pvalue_manual(stat.test %>% filter(feature=="days_adm"),
+                     size = 7,
+                     y.position = 6,
+                     bracket.size = 0.8, #label = "p.adj.signif", tip.length = 0.01,
+                     hide.ns = T,
+                     coord.flip = T,
+                     inherit.aes = FALSE) +
+  labs(x = "",
+       y = "Hospital admission (days)", 
+       subtitle = "Hospitalisation",
+       caption = "Wilcox test") +
+  jtools::theme_nice() +
+  theme12 + 
+  theme(legend.position='none') +
+  coord_flip() #+
+#ggsave(paste0("../",result.dir,"Hospital_admission.pdf"), width = 6,height = 3)
+```
+
+
