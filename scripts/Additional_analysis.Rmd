@@ -1,6 +1,6 @@
 ---
 title: "Systems Immunology Malaria Traveller Cohort"
-subtitle: "Cell Reports Revision - Additional analysis"
+subtitle: "Additional analysis"
 author: "Maximilian Julius Lautenbach"
 date: '`r format(Sys.Date(), "%Y-%m-%d")`'
 output:
@@ -29,10 +29,11 @@ options(stringsAsFactors = FALSE)
 ```{r packages, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(viridis)
-#library(MOFA2)
 library(RColorBrewer)
 library(ComplexHeatmap)
 library(circlize)
+library(dagitty)
+library(ggdag)
 source("../scripts/helper_fun.R")
 ```
 
@@ -41,35 +42,10 @@ source("../scripts/helper_fun.R")
 ### load data
 
 ```{r message=FALSE, warning=FALSE}
-#model <- load_model("../data/MEFISTO_model_updated.hdf5", load_interpol_Z = TRUE)
-
-#mefisto.input <- read_csv("../data/MEFISTO_input_data.csv") # 2021-05-23_TravellerCohort_FACS_log2cpu_long.csv")
-mefisto.input <- readRDS("../data/MEFISTO_input_data.Rds")
-all.data <- readRDS("../data/ALL_input_data.Rds")
+all.data <- readRDS("../data/MEFISTO_input_data.Rds")
 data.ab <- read_csv("../data/TravellerCohort_IgGclass_long.csv")
-
-data.all.inputed <- read_csv("../data/Factor1_inputed_samples.csv")
 subjectTable <- read_csv("../data/TravellerCohort_SubjectTable.csv")
 sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
-
-```
-
-
-```{r}
-#hemoglobin_genotype <- read_xlsx("../../malaria_traveller_study/data/raw_data/20220204_SCT_whole analysis.xlsx")
-
-#hemoglobin_genotype %>% 
-#  rename(ID = "Sample ID",
-#         hemoglobin_gt = "Hemoglobin profile") %>% 
-#  inner_join(subjectTable %>% select(ID,Endemic),by="ID") %>% 
-#  group_by(Endemic) %>% 
-#  count(hemoglobin_gt)
-
-#subjectTable_updated <- subjectTable %>% inner_join(hemoglobin_genotype %>% 
-#                                                      rename(ID = "Sample ID",hemoglobin_gt = "Hemoglobin profile") %>%
-#                                                      select(ID,hemoglobin_gt),
-#                                                    by= "ID") %>% 
-#  left_join(cmv.data %>% select(ID,cmv.status),by="ID")
 ```
 
 
@@ -77,12 +53,12 @@ sampleTable <- read_csv("../data/TravellerCohort_SampleTable.csv")
 - T cell dynamics over time
 
 ```{r}
-temp.data <- mefisto.input %>% rename(sampleID = sample) %>% 
+temp.data <- all.data %>% rename(sampleID = sample) %>% 
   inner_join(sampleTable,by="sampleID") %>% 
   filter(view=="Facs") %>%
   mutate(ID = gsub("\\|.*","",sampleID),
          Time = as.factor(gsub(".*\\|","",sampleID))) %>% 
-  bind_rows(mefisto.input %>% rename(sampleID = sample) %>% 
+  bind_rows(all.data %>% rename(sampleID = sample) %>% 
   inner_join(sampleTable,by="sampleID") %>% 
   filter(view=="Facs") %>%
   mutate(ID = gsub("\\|.*","",sampleID),
@@ -115,7 +91,7 @@ gd_tcells <- c("Total gdT cells","Vd2+ gdT cells","Vd2- gdT cells")
         panel.spacing.y=unit(0.5, "lines")))
 
 
-#pdf("../plots/Tcell_overtime_revision.pdf", width = 6,height = 7.5, useDingbats = F,   title="main", paper = "a4", compress = T ) #colormodel = "cmyk"
+#pdf("../plots/Figure_S3_2.pdf", width = 6,height = 7.5, useDingbats = F,   title="main", paper = "a4", compress = T ) #colormodel = "cmyk"
 p1 + theme(legend.position = "none") 
 #dev.off()#
 ```
@@ -123,6 +99,15 @@ p1 + theme(legend.position = "none")
 
 
 ## Figure S7 C-D
+```{r}
+temp.selection <- data.ab %>% select(sampleID,feature,value,Time,ID) %>% 
+  bind_rows(all.data %>% rename(sampleID = sample) %>% 
+              mutate(ID = gsub("\\|.*","",sampleID),
+                     Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID)) %>%
+  mutate(time_feature = paste0(Time,"_",feature)) %>% 
+  select(-feature,-Time,-sampleID) %>% 
+  spread(time_feature,value) 
+```
 
 ```{r}
 df <- temp.selection %>% inner_join(subjectTable %>% select(ID,Endemic,inf_rbc,cmv.status, hemoglobin_gt,years_since_endemic,years_in_endemic),by="ID") %>% mutate(hemoglobin_gt = factor(hemoglobin_gt, levels=c("AA","AS")),
@@ -182,7 +167,9 @@ m1 <- lm(`Acute_IFN-gamma` ~ inf_rbc + Acute_IgG3 + `Acute_Intermediate monocyte
 modelsummary::modelsummary(list("PrevExposure" = m00,
                                 "iRBC" = m0,
                                 "iRBC | IgG3 + int. monocytes" = m1),
-                           stars = T)
+                           stars = T,
+                            statistic = 'conf.int', 
+             conf_level = .95)
 
 modelsummary::modelplot(list("PrevExposure" = m00,
                              "iRBC" = m0,
@@ -258,12 +245,14 @@ m2 <- lm(`D10_Vd2+ gdT cells` ~ inf_rbc + Acute_IgG1 + `Acute_Intermediate monoc
 modelsummary::modelsummary(list("PrevExposure" = m00,
                                 "iRBC" = m0,
                                 "iRBC | IgG3 + int. monocytes" = m1),
-                           stars = T)
+                           stars = T, statistic = 'conf.int', 
+             conf_level = .95)
 
 modelsummary::modelsummary(list("PrevExposure" = m00,
                                 "iRBC" = m0,
                                 "iRBC | IgG1 + int. monocytes" = m2),
-                           stars = T)
+                           stars = T, statistic = 'conf.int', 
+             conf_level = .95)
 
 modelsummary::modelplot(list("PrevExposure" = m00,
                              "iRBC" = m0,
@@ -285,10 +274,10 @@ performance::test_likelihoodratio(m0,m1, estimator = "OLS")
 performance::test_likelihoodratio(m0,m2, estimator = "OLS")
 ```
 
-## save DAG for S7
+## save DAG for S7 C, D
 ```{r}
 library(patchwork)
-#pdf("../plots/DAGs_FigurS7_feb16.pdf", width = 6, height = 8, useDingbats = T,   title="Supplementary7", bg="transparent",# paper = "a4",colormodel = "cmyk", compress = T, pagecentre =T)
+#pdf("../plots/Figure_S7c_d.pdf", width = 6, height = 8, useDingbats = T, title="Supplementary7", bg="transparent",# paper = "a4",colormodel = "cmyk", compress = T, pagecentre =T)
 
 (dag_ifn_irbc + theme(legend.position = "none")) /
     (dag_gdt_irbc + theme(legend.position = "none"))
@@ -297,7 +286,7 @@ library(patchwork)
 ```
 
 ## Figure S7 E-H
-## FiImpact of similar parasitemia on immune response 
+### Does parasitemia impact immune response 
 
 ```{r message=FALSE, warning=FALSE}
 set.seed(2022)
@@ -316,7 +305,6 @@ inf_rbc_cluster <-
 ```{r message=FALSE, warning=FALSE}
 selected.group = "medium"
 
-## get protein, cell, ab data for "medium" Parasitemia group
 inf_rbc_cluster %>% filter(cluster == selected.group) %>% count(Endemic)
 
 selection_irbc_IDs <- inf_rbc_cluster %>% filter(cluster == selected.group) %>% pull(ID)
@@ -325,7 +313,7 @@ selection_irbc_IDs <- inf_rbc_cluster %>% filter(cluster == selected.group) %>% 
 selection_irbc_ab.data <- data.ab %>% filter(ID %in% selection_irbc_IDs)
 
 ## get protein/cell data
-temp <-  mefisto.input %>% rename(sampleID = sample) %>% 
+temp <-  all.data %>% rename(sampleID = sample) %>% 
   inner_join(sampleTable,by="sampleID") %>% 
   mutate(ID = gsub("\\|.*","",sampleID),
          Time = as.factor(gsub(".*\\|","",sampleID)))
@@ -456,7 +444,7 @@ jtools::theme_nice() +
 
 ```{r message=FALSE, warning=FALSE}
 library(patchwork)
-#pdf("../plots/Medium_parasitemia_revision_feb15.pdf", width = 6,height = 2, useDingbats = F,   title="main", paper = "a4", compress = T ) 
+#pdf("../plots/Figure_S7e_h.pdf", width = 6,height = 2, useDingbats = F,   title="main", paper = "a4", compress = T ) 
 p1 + theme(legend.position = "none") + 
   p2 + theme(#strip.text.x = element_text(size = 3.5),
     axis.text.x = element_blank(),
@@ -474,947 +462,5 @@ p1 + theme(legend.position = "none") +
 
 
 
-
-
-
-# =============
-# ### CLEAN ###
-# =============
-
-## Reviewer 1 - Question 20
-
-### Data prep
-```{r}
-temp.selection <- data.ab %>% select(sampleID,feature,value,Time,ID) %>% 
-  bind_rows(mefisto.input %>% rename(sampleID = sample) %>% 
-              # inner_join(sampleTable,by="sampleID") %>% 
-              mutate(ID = gsub("\\|.*","",sampleID),
-                     Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID)) %>%
-  mutate(time_feature = paste0(Time,"_",feature)) %>% 
-  #filter(time_feature %in% c("Acute_IFN-gamma","Acute_TNF","Acute_IgG3","Acute_Intermediate monocytes","Acute_Vd2+ gdT cells","D10_Vd2+ gdT cells")) %>% 
-  select(-feature,-Time,-sampleID) %>% 
- # mutate(time_feature = gsub("_"," ",time_feature)) %>% 
-  spread(time_feature,value) 
-
-treatment_4_lm <- subjectTable %>% select(ID,treat_1) %>% mutate(treat_1_named = ifelse(treat_1 == 2,"mefloquine (Lariam)",
-                                                                              ifelse(treat_1 == 8,"Quinine iv",
-                                                                                     ifelse(treat_1 == 10,"Artemisinin-based drug incl artesunate",
-                                                                                            ifelse(treat_1 == 20,"Riamet",NA))))) %>% 
-  mutate(treat_1_named = as.factor(treat_1_named)) %>% 
-  mutate(bin = 1) %>% 
-  
-  spread(treat_1_named,bin) %>% replace(is.na(.), 0) %>% 
-  inner_join(inf_rbc_cluster,by="ID") %>% 
-  mutate(Endemic = factor(as.factor(Endemic), levels=c("primary_infected", "previously_exposed"))) 
-```
-
-### Does treatment explain D10 Vd2+ Tcell numbers?
- * two-way ANOVA
-response.var ~ cat.var1 + cat.var2
-Is there a unique effect of the cat.var1 or cat.var2  on response.var?
-
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`D10_Vd2+ gdT cells`) %>% inner_join(treatment_4_lm,by="ID") %>%  na.omit()
-
-#https://bookdown.org/ndphillips/YaRrr/ex-two-way-anova.html
-# Step 1: Create an aov object
-mod.aov <- aov(`D10_Vd2+ gdT cells` ~ Endemic + `Artemisinin-based drug incl artesunate`, 
-               data = df)
-# Step 2: Look at a summary of the aov object
-summary(mod.aov)
-# Step 3: Calculate post-hoc tests
-# Step 4: Look at coefficients
-mod.lm <- lm(`D10_Vd2+ gdT cells` ~ #Endemic + 
-               factor(`Artemisinin-based drug incl artesunate`), 
-               data = df)
-
-summary(mod.lm)$coefficients
-
-## balanced samples?
-with(df,
-     table(Endemic, `Artemisinin-based drug incl artesunate`))
-# Type III ANOVA - Anova(type = 3)
-time.III.aov <- car::Anova(mod.lm, type = 2)
-time.III.aov
-```
--> no impact of anti-malaria regime on Vd2+ T cells at D10
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`Acute_Vd2+ gdT cells`,`D10_Vd2+ gdT cells`) %>% mutate(fc = `D10_Vd2+ gdT cells`/`Acute_Vd2+ gdT cells`) %>% inner_join(treatment_4_lm,by="ID") %>% na.omit()
-
-m00 <- lm(fc ~ Endemic, data = df)
-m0 <- lm(fc ~ Endemic + factor(`Artemisinin-based drug incl artesunate`) + factor(`mefloquine (Lariam)`) + factor(Riamet), data = df)
-m1 <- lm(fc ~ `Acute_IFN-gamma` + Endemic + factor(`Artemisinin-based drug incl artesunate`) + factor(`mefloquine (Lariam)`) + factor(Riamet), data = df)
-
-summary(m00)$coefficients
-summary(m0)$coefficients
-summary(m1)$coefficients
-```
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`Acute_Vd2+ gdT cells`,`D10_Vd2+ gdT cells`) %>% mutate(fc = `D10_Vd2+ gdT cells`/`Acute_Vd2+ gdT cells`) %>% inner_join(treatment_4_lm,by="ID") %>% na.omit()
-
-#df <- df %>% filter(ID != "2016008")
-
-plot(x=df$`Acute_IFN-gamma` ,y=df$fc,col=df$Endemic)
-
-m00 <- lm(fc ~ Endemic, data = df)
-m1 <- lm(fc ~ `Acute_IFN-gamma` + Endemic, data = df)
-
-summary(m00)
-summary(m1)$coefficients
-
-summary(m1)
-```
-
-## Treatment
-treat_1 key
-first antimalarial treatment given
-1 = atovaquone/proguanil (Malarone)
-2 = mefloquine (Lariam)
-3 = Chloroquine 
-7 = Chloroquine + Primaquine
-8 = Quinine iv
-9=Quinine po
-10 = Artemisinin-based drug incl artesunate
-11 = Quinine + Doxycycline
-13 = Other combination
-14 = Other
-15 = No treatment given here 
-16= Quinine and Fansidar
-17 = Fansidar (sulfadoxine pyrimetamine)
-18 = Quinine continue with mefloquine
-19 = Quinine continue with primaquin
-20 = Riamet
-21 =  mefloquine continue with primaquine
-22 = chloroquine & Fansider
-23= Riamet & primaquine
-24= fansider continued med primaquin
-25= doxycycline
-30=unknown
-31= artemisin iv + quinine iv
-32=chloroquin + other drug
-33=malarone+primaquine
-
-```{r}
-subjectTable %>% select(ID,Endemic,treat_1) %>% 
-  mutate(treat_1 = as.factor(treat_1)) %>% 
-  group_by(Endemic) %>% 
-  count(treat_1) %>% 
-  ggplot(aes(x=treat_1,y=n,fill=Endemic, label=n)) +
-  geom_col(position="dodge") +
-  ylim(0,27) +
-  labs(x="",
-       y="Number of patients") +
-  geom_text(stat = "sum", vjust = 0,show.legend = F,position = position_dodge(width = .9)) +
-  scale_fill_manual(values=ENDEMIC_colors) +
-  scale_x_discrete(labels=c("2"="mefloquine (Lariam)","8"="Quinine iv","10"="Artemisinin-based drug incl artesunate", "20"="Riamet")) +
-  theme_pubr() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) 
-
-```
-
-```{r}
-subjectTable %>% select(ID,Endemic,treat_1) %>% group_by(Endemic,treat_1) %>% tally() %>% 
-  group_by(treat_1) %>%
-  mutate(pct = n/sum(n),
-         n.pos = cumsum(n) - 0.5*n) %>% 
-  mutate(treat_1 = as.factor(treat_1),
-         Endemic = factor(as.factor(Endemic), levels=c("primary_infected", "previously_exposed"))) %>% 
-  
-  ggplot(aes(x=treat_1, y=n, fill=Endemic)) +
-  geom_bar(stat="identity") +
-  scale_x_discrete(labels=c("2"="mefloquine (Lariam)","8"="Quinine iv","10"="Artemisinin-based drug incl artesunate", "20"="Riamet"))+
-  scale_fill_manual(values=ENDEMIC_colors) +
-  labs(x="",
-       y="Total number patients",
-       title="1st treatment") +
-  geom_text(aes(label = stat(y), group = treat_1), 
-            stat = 'summary', fun = sum, vjust = -0.5) +
-  geom_text(aes(label= paste0(sprintf("%1.1f", pct*100),"%"), y=n.pos), size=3, colour="white") +
-  theme_pubr() + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
-   ylim(0,43) 
-```
-```{r}
-subjectTable %>% select(ID,Endemic,treat_2) %>% group_by(Endemic,treat_2) %>% tally() %>% 
-  group_by(treat_2) %>%
-  mutate(pct = n/sum(n),
-         n.pos = cumsum(n) - 0.5*n) %>% 
-  mutate(treat_2 = as.factor(treat_2),
-         Endemic = factor(as.factor(Endemic), levels=c("primary_infected", "previously_exposed"))) %>% 
-  
-  ggplot(aes(x=treat_2, y=n, fill=Endemic)) +
-  geom_bar(stat="identity") +
-  scale_x_discrete(labels=c("2"="mefloquine (Lariam)","9"="Quinine po","10"="Artemisinin-based drug incl artesunate", "20"="Riamet"))+
-  scale_fill_manual(values=ENDEMIC_colors) +
-  labs(x="",
-       y="Total number patients",
-       title="2nd treatment") +
-  geom_text(
-    aes(label = stat(y), group = treat_2), 
-    stat = 'summary', fun = sum, vjust = -0.5) +
-  geom_text(aes(label= paste0(sprintf("%1.1f", pct*100),"%"), y=n.pos), size=3, colour="white") +
-  theme_pubr() + 
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
-   ylim(0,45) 
-```
-
-
-
-superv_intake_n_doses	Number of doses of artemether-lumefantrine for which intake was supervised
-unsuperv_intake_n_doses	Number of doses of artemether-lumefantrine for which intake was not supervised
-artesu	Study subject received initial intravenous  treatment with artesunate
-iv_treat	Study subject received initial intravenous  treatment with artesunate
-
-
-## SCT influence testing on model DAG 1 model
-
-```{r}
-# n=24
-data4model <- df %>% select(`Acute_IFN-gamma`,Endemic,inf_rbc,Acute_IgG3,`Acute_Intermediate monocytes`,cmv.status,hemoglobin_gt) %>% na.omit()
-m00 <- lm(`Acute_IFN-gamma` ~ Endemic, data = data4model)
-m0 <- lm(`Acute_IFN-gamma` ~ inf_rbc, data = data4model)
-m1 <- lm(`Acute_IFN-gamma` ~ inf_rbc + Acute_IgG3 + `Acute_Intermediate monocytes`, data = data4model)
-m2 <- lm(`Acute_IFN-gamma` ~ inf_rbc + Acute_IgG3 + `Acute_Intermediate monocytes` + cmv.status, data = data4model)
-m3 <- lm(`Acute_IFN-gamma` ~ inf_rbc + Acute_IgG3 + `Acute_Intermediate monocytes` + hemoglobin_gt, data = data4model)
-
-modelsummary::modelsummary(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                                "iRBC | IgG3 + int. monocytes" = m1,
-                                "iRBC | IgG3 + int. monocytes + CMV" = m2,
-                                "iRBC | IgG3 + int. monocytes + SCT" = m3),
-                           stars = T)
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                             "iRBC" = m0,
-                             "iRBC | IgG3 + int. monocytes" = m1,
-                             "iRBC | IgG3 + int. monocytes + CMV" = m2,
-                             "iRBC | IgG3 + int. monocytes + SCT" = m3),
-                        stars =T, facet=F) +
-  labs(x = 'Coefficients', 
-       y = 'Term names',
-       title = 'Linear regression models of IFNgamma  (NPX)"',
-       caption = "") +
-  scale_color_manual(values = randomcoloR::distinctColorPalette(5))
-
-performance::compare_performance(m00, m0,m1,m2,m3, rank = TRUE) 
-anova(m00,m0,m1,m2,m3,  test='LRT')
-anova(m1)
-#performance::check_model(m1)
-performance::test_vuong(m00,m0,m1,m2,m3)
-performance::test_bf(m00,m0,m1, m2, m3)
-performance::test_bf(m1, m2, m3)
-
-```
-
-
-
-## SCT influence testing on model DAG 2 model
-
-```{r}
-# n=18
-data4model <- df %>% select(`D10_Vd2+ gdT cells`,Endemic,inf_rbc,Acute_IgG3,cmv.status,hemoglobin_gt) %>% na.omit()
-m00 <- lm(`D10_Vd2+ gdT cells` ~ Endemic, data = data4model)
-m0 <- lm(`D10_Vd2+ gdT cells` ~ inf_rbc, data = data4model)
-m1 <- lm(`D10_Vd2+ gdT cells` ~ inf_rbc + Acute_IgG3, data = data4model)
-m2 <- lm(`D10_Vd2+ gdT cells` ~ inf_rbc + Acute_IgG3 + cmv.status, data = data4model)
-m3 <- lm(`D10_Vd2+ gdT cells` ~ inf_rbc + Acute_IgG3 + hemoglobin_gt, data = data4model)
-
-modelsummary::modelsummary(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                                "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + CMV" = m2,
-                                "iRBC | IgG3  + SCT" = m3),
-                           stars = T)
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                                "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + CMV" = m2,
-                                "iRBC | IgG3  + SCT" = m3),
-                        stars =T, facet=F) +
-  labs(x = 'Coefficients', 
-       y = 'Term names',
-       title = 'Linear regression models of Vd2+ gdT cells"',
-       caption = "") +
-  scale_color_manual(values = randomcoloR::distinctColorPalette(5))
-
-performance::compare_performance(m00, m0,m1,m2,m3, rank = TRUE) 
-
-anova(m00, m0,m1,m2,m3, test='LRT')
-anova(m1)
-#performance::check_model(m1)
-
-## CMV influence
-anova(m2)
-## SCT influence
-anova(m3)
-```
-
-
-### S7E - D10 Vd2+ gdTcells + IgG3, IgG3+monocytes
-```{r}
-data4model <- df %>% select(`D10_Vd2+ gdT cells`,Endemic,inf_rbc,Acute_IgG3,`Acute_Intermediate monocytes`,cmv.status,hemoglobin_gt) %>% na.omit()
-m00 <- lm(`D10_Vd2+ gdT cells` ~ Endemic, data = data4model)
-m0 <- lm(`D10_Vd2+ gdT cells` ~ Acute_IgG3, data = data4model)
-m1 <- lm(`D10_Vd2+ gdT cells` ~ Acute_IgG3 + `Acute_Intermediate monocytes`, data = data4model)
-m2 <- lm(`D10_Vd2+ gdT cells` ~ Acute_IgG3 + `Acute_Intermediate monocytes` + cmv.status, data = data4model)
-m3 <- lm(`D10_Vd2+ gdT cells` ~ Acute_IgG3 + `Acute_Intermediate monocytes` +  hemoglobin_gt, data = data4model)
-
-modelsummary::modelsummary(list("PrevExposure" = m00,
-                                "IgG3" = m0,
-                                "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes + CMV" = m2,
-                                "iRBC | IgG3 + int. monocytes + SCT" = m3),
-                           stars = T)
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "IgG3" = m0,
-                                "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes + CMV" = m2,
-                                "iRBC | IgG3 + int. monocytes + SCT" = m3),
-                        stars =T, facet=F) +
-  labs(x = 'Coefficients', 
-       y = 'Term names',
-       title = 'Linear regression models of Vd2+ gdT cells"',
-       caption = "") +
-  scale_color_manual(values = randomcoloR::distinctColorPalette(5))
-
-performance::compare_performance(m00, m0,m1,m2,m3, rank = TRUE) 
-
-anova(m00, m0,m1,m2,m3, test='LRT')
-
-performance::check_model(m1)
-
-```
-
-
-```{r}
-data4model <- df %>% select(`D10_Vd2+ gdT cells`,Endemic,inf_rbc,`Acute_IFN-gamma`,Acute_IgG3,`Acute_Intermediate monocytes`,cmv.status,hemoglobin_gt) %>% na.omit()
-m1 <- lm(`D10_Vd2+ gdT cells` ~ Endemic, data = data4model)
-m2 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma`, data = data4model)
-m3 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + inf_rbc +Acute_IgG3 + `Acute_Intermediate monocytes`, data = data4model)
-m4 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Acute_IgG3 + `Acute_Intermediate monocytes` + cmv.status, data = data4model)
-m5 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Acute_IgG3 + `Acute_Intermediate monocytes` + hemoglobin_gt, data = data4model)
-
-modelsummary::modelsummary(list("PrevExposure" = m1,
-                                "IFNg" = m2,
-                                "IFNg | iRBC | IgG3" = m3,
-                                "iRBC | IgG3 + int. monocytes + CMV" = m4,
-                                "iRBC | IgG3 + int. monocytes + SCT" = m5),
-                           stars = T)
-
-modelsummary::modelplot(list("PrevExposure" = m1,
-                                "IFNg" = m2,
-                                "IFNg | iRBC | IgG3" = m3,
-                                "iRBC | IgG3 + int. monocytes + CMV" = m4,
-                                "iRBC | IgG3 + int. monocytes + SCT" = m5),
-                        stars =T, facet=F) +
-  labs(x = 'Coefficients', 
-       y = 'Term names',
-       title = 'Linear regression models of Vd2+ gdT cells"',
-       caption = "") +
-  scale_color_manual(values = randomcoloR::distinctColorPalette(5))
-
-performance::compare_performance(m1, m2,m3,m4,m5, rank = TRUE) 
-
-anova(m00, m0,m1,m2,m3, test='LRT')
-
-performance::check_model(m1)
-performance::test_performance(m1,m2,m3, m4,m5,include_formula = TRUE)
-
-anova(m4)
-```
-
-
-
-
-
-
-
-```{r}
-library(performance)
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`, `Acute_IgG3`,`Acute_Intermediate monocytes`) %>% inner_join(subjectTable_updated %>% select(ID,Endemic,inf_rbc),by="ID") %>% na.omit() 
-m00 <- lm(`Acute_IFN-gamma` ~ factor(Endemic), data = df)
-m0 <- lm(`Acute_IFN-gamma` ~ inf_rbc, data = df)
-m1 <- lm(`Acute_IFN-gamma` ~ inf_rbc + `Acute_IgG3`, data = df)
-m2 <- lm(`Acute_IFN-gamma` ~ inf_rbc + `Acute_IgG3` + `Acute_Intermediate monocytes`, data = df)
-
-
-compare_performance(m00, m0,m1, m2, rank = TRUE) 
-
-plot(compare_performance(m00, m0, m1,m2))
-
-test_performance(m00,m0,m1, m2,include_formula = TRUE)
-# Equivalent to anova(m1, m2, m3, test='LRT')
-test_likelihoodratio(m0,m1, m2, estimator = "OLS")
-
-anova(m00,m0, m1, m2, test='LRT')
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                             "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes" = m2), 
-                        coef_omit = 'Interc',
-                        stars =T, 
-                        facet=F) +
-  labs(#x = 'Coefficients', 
-        # y = 'Term names',
-         title = 'Linear regression models of IFNgamma  (NPX)',
-         caption = "") +
-    scale_color_manual(values = randomcoloR::distinctColorPalette(4))
-
-summary(m2)$coefficient
-```
-
-The Robust Likelihood Test (the LR column and its associated p-value) indicates whether each model fits better than the reference model. If the models are nested, then the test works as a robust LRT. The code for this function is adapted from the nonnest2 package, and all credit go to their authors.
-
-```{r}
-test_vuong(m00, m0,m1,m2) #https://easystats.github.io/performance/reference/test_performance.html
-
-test_lrt(m00, m0)
-
-sjPlot::tab_model(m00,m0, m1)
-
- modelsummary::modelsummary(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                                "iRBC | IgG3 + int. monocytes" = m1),
-                           stars = T)
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                             "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes" = m2), stars =T, facet=F) +
-  labs(#x = 'Coefficients', 
-        # y = 'Term names',
-         title = 'Linear regression models of IFNgamma  (NPX)"',
-         caption = "") +
-    scale_color_manual(values = randomcoloR::distinctColorPalette(4))
-
-car::Anova(m00,m2)
-anova(m0,m1)
-anova(m00)
-anova(m0)
-anova(m2)
-
-m3 <- lm(`Acute_IFN-gamma` ~ `Acute_Intermediate monocytes`, data = df)
-m4 <- lm(`Acute_IFN-gamma` ~ years_since_endemic, data = df %>% inner_join(subjectTable %>% select(ID,years_since_endemic) %>% na.omit() ))
-
-```
-
-
-## Reviewer 2 - Question 1
-
-# Test impact of Hemoglobin genotype
-
-```{r}
-temp.selection <- data.ab %>% select(sampleID,feature,value,Time,ID) %>% 
-  bind_rows(mefisto.input %>% rename(sampleID = sample) %>% 
-              mutate(ID = gsub("\\|.*","",sampleID),
-                     Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID)) %>%
-  mutate(time_feature = paste0(Time,"_",feature)) %>% 
-  select(-feature,-Time,-sampleID) %>% 
-  spread(time_feature,value) %>% 
-  inner_join(inf_rbc_cluster,by="ID") %>% 
-  mutate(Endemic = factor(as.factor(Endemic), levels=c("primary_infected", "previously_exposed"))) %>% 
-  inner_join(subjectTable %>% select(-Endemic,-inf_rbc),by="ID")
-```
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`D10_Vd2+ gdT cells`,hemoglobin_gt,Endemic) %>% mutate(hemoglobin_gt = factor(hemoglobin_gt, levels=c("AA","AS"))) %>% na.omit()
-
-#df.lm <- glm(rank(`D10_Vd2+ gdT cells`) ~ `Acute_IFN-gamma` +Endemic+ hemoglobin_gt, data=df)
-glm1 <- glm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Endemic * hemoglobin_gt, data=df)
-
-summary(glm1)
-#car::Anova(df.lm, type = 2)
-confint(glm1)
-
-```
-```{r}
-#https://www.youtube.com/watch?v=zdAYrfXOz68
-library(gdata)
-library(infer)
-slopeboot <- df %>% 
-  specify(response=`D10_Vd2+ gdT cells`,explanatory=`Acute_IFN-gamma`) %>% 
-  generate(reps=5000, type="bootstrap") %>% 
-  calculate(stat="slope")
-
-slopeboot %>% 
-  ggplot(aes(x=stat)) +
-  geom_density() +
-  geom_vline(xintercept = 0.50037, color="red") # original slope 0.50037
-
-## confidence intervals 
-# Method 1
-get_ci(slopeboot)
-confint(glm1)
-plot(glm1, which=2)
-```
-
-```{r}
-ggplot(data = df,mapping = aes(x=`Acute_IFN-gamma`,y=`D10_Vd2+ gdT cells`,col=hemoglobin_gt,shape=Endemic))+geom_point()+
-  #scale_x_continuous(name = "Power (HP)")+
-  #scale_y_continuous(name = "Fuel Efficiency (MPG)")+
-  geom_smooth(method = "lm")+theme_classic()
-```
-```{r}
-install.packages('boot',dep=TRUE)
-library(boot)
-
-function_1 <- function(data, i){
- d2 <- data[i,] 
- return(cor(d2$`D10_Vd2+ gdT cells`, d2$`Acute_IFN-gamma`))
-}
-set.seed(1)
-bootstrap_correlation <- boot(df,function_1,R=10000)
-summary(bootstrap_correlation)
-boot.ci(boot.out=bootstrap_correlation,type=c("norm","basic","perc","bca"))
-
-
-## http://web.stanford.edu/~rjohari/teaching/notes/226_lecture13_inference.pdf
-
-coef.boot = function(data, indices) {
-fm = lm(data = data[indices,], `D10_Vd2+ gdT cells` ~ 1 + `Acute_IFN-gamma`)
-return(coef(fm))
-}
-boot.out = boot(df, coef.boot, 50000)
-boot.out
-
-###
-ggplot(data=gdata::resample(df), aes(y=`D10_Vd2+ gdT cells`, x=`Acute_IFN-gamma`)) +
-  geom_point(alpha=0.5)+
-  geom_smooth(method=lm, se=F)
-```
-
-
-```{r}
-#https://www.r-bloggers.com/2021/07/how-to-perform-ancova-in-r/
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`D10_Vd2+ gdT cells`,inf_rbc,hemoglobin_gt,Endemic, cmv.status) %>% mutate(hemoglobin_gt = factor(hemoglobin_gt, levels=c("AA","AS"))) %>% na.omit() 
-  
-ancova_model <- aov(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Endemic + cmv.status + hemoglobin_gt, df)
-Anova(ancova_model, type="III")
-
-library(multcomp)
-
-postHocs <- glht(ancova_model, linfct = mcp(hemoglobin_gt = "Tukey"))
-summary(postHocs)
-
-
-car::leveneTest(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Endemic + cmv.status + hemoglobin_gt, df)
-```
-## remove AS samples
-
-```{r}
-df <- temp.selection %>% dplyr::select(ID,`Acute_IFN-gamma`,`D10_Vd2+ gdT cells`,inf_rbc,hemoglobin_gt,Endemic) %>% filter(hemoglobin_gt=="AA") %>% na.omit()
-glm1 <- glm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + Endemic, data=df)
-
-summary(glm1)
-#car::Anova(df.lm, type = 2)
-confint(glm1)
-```
-
-
-
-
-
-## 6 individuals from each group (primary,previous AA,previous AS)
-```{r}
-#bind_rows(data.ab %>% select(sampleID,feature,value,Time,ID),
-#          mefisto.input %>% rename(sampleID = sample) %>% 
-#            mutate(ID = gsub("\\|.*","",sampleID),
-#                   Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID)) %>%
-#  right_join(subjectTable_updated %>% select(-sampleID), by="ID") %>% 
-#  filter(Time=="Acute") %>% 
-#  spread(feature,value) %>% 
-#    group_by(Endemic,hemoglobin_gt) %>% 
-#  count(Time)
-
-AS <- subjectTable_updated %>% filter(hemoglobin_gt =="AS")
-AA_prev <- subjectTable_updated %>% filter(hemoglobin_gt =="AA",Endemic=="previously_exposed")
-AA_prim <- subjectTable_updated %>% filter(hemoglobin_gt =="AA",Endemic=="primary_infected")
-
-#subjectTable_updated %>% 
-#  ggplot() +
-#  geom_histogram(aes(x=age_inclusion))+facet_grid(Endemic~hemoglobin_gt)
-
-AA_prev %>% filter(between(age_inclusion, min(AS$age_inclusion), max(AS$age_inclusion)))
-
-AA_prev.id <- AA_prev %>% filter(age_inclusion %in% AS$age_inclusion) %>% pull(ID)
-
-AA_prim.id <- AA_prim %>% filter(age_inclusion %in% AS$age_inclusion) %>% pull(ID)
-
-subjectTable_updated %>% 
-   filter(ID %in% c(AS$ID, AA_prev.id, AA_prim.id)) %>% 
-  ggplot(aes(x= interaction(Endemic,hemoglobin_gt,lex.order = T), y=inf_rbc, color=Endemic)) +
-  geom_violin(width = 0.5) +
-  geom_boxplot(width = 0.2) +
-  geom_jitter(width = 0.1)+
-  stat_compare_means(method = "anova", label.y = 4)+      # Add global p-value
-  stat_compare_means(label = "p.signif", method = "wilcox.test",
-                     ref.group = ".all.") +
-    scale_y_continuous(trans='log2',) +
-  labs(x="", y="iRBC (%)") +
-  scale_color_manual(values=ENDEMIC_colors)+
-  theme_classic()
-
-## getting the data
-bind_rows(data.ab %>% select(sampleID,feature,value,Time,ID),
-          mefisto.input %>% rename(sampleID = sample) %>% 
-            mutate(ID = gsub("\\|.*","",sampleID),
-                   Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID)) %>%
-  inner_join(subjectTable_updated %>% select(-sampleID), by="ID") %>%
-  #mutate(feature = paste0(Time,"_",feature)) %>%  select(-Time) %>% 
-  filter(Time=="Acute") %>% 
-  spread(feature,value) %>% 
-  mutate(MEFISTO = "yes") %>% 
-    filter(ID %in% c(AS$ID, AA_prev.id, AA_prim.id)) %>% 
-  # ID =="2014012" has no acute sample
-  #group_by(Endemic,hemoglobin_gt) %>% 
-  #count(MEFISTO)
-  ggplot() +
-  geom_point(aes(x= interaction(Endemic,hemoglobin_gt,lex.order = T), y=inf_rbc, color=hemoglobin_gt))
-  
-```
-```{r}
-subjectTable_updated %>% inner_join(inf_rbc_cluster %>% select(ID,cluster),by="ID") %>% rename(inf_rbc_cluster = cluster) %>% group_by(Endemic, inf_rbc_cluster) %>% count(hemoglobin_gt) %>% 
-  ggplot(aes(x=hemoglobin_gt,y=n)) +
-  geom_col()+ facet_grid(~inf_rbc_cluster)
-
-subjectTable_updated %>% group_by(Endemic,hemoglobin_gt) %>% summarise(median(inf_rbc))
-
-df <- subjectTable_updated %>% mutate(Endemic_hemoglobin_gt = factor(paste0(Endemic,"_",hemoglobin_gt),levels=c("primary_infected_AA","previously_exposed_AA","previously_exposed_AS")))
-summary(lm(inf_rbc~Endemic_hemoglobin_gt,df))
-```
-
-## Reviewer 1 - minor comment 9
-
-```{r}
-subjectTable_updated %>% 
-  ggplot(aes(x= interaction(Endemic,hemoglobin_gt,lex.order = T), y=inf_rbc, color=Endemic)) +
-  geom_violin(width = 0.5,outlier.size = 0) +
-  geom_boxplot(width = 0.2) +
-  geom_jitter(width = 0.1)+
-  stat_compare_means(method = "anova", label.y = 5)+      # Add global p-value
-  stat_compare_means(label = "p.signif", method = "wilcox.test",
-                     ref.group = ".all.",label.y=4.5) +
-    scale_y_continuous(trans='log2',) +
-  labs(x="", y="iRBC (%)") +
-  scale_color_manual(values=ENDEMIC_colors)+
-  theme_classic()
-```
-```{r}
-df <- temp.selection %>% inner_join(subjectTable_updated %>% select(ID,Endemic,inf_rbc,cmv.status, hemoglobin_gt,years_since_endemic,years_in_endemic),by="ID") %>% mutate(hemoglobin_gt = factor(hemoglobin_gt, levels=c("AA","AS")),
-                                                                                                                                cmv.status = factor(cmv.status, levels=c("negative","positive")),
-                                                                                                                                Endemic = factor(Endemic, levels=c("primary_infected","previously_exposed")))
-df_prevexpo <- df %>% filter(Endemic=="previously_exposed")
-cor.test(df_prevexpo$`Acute_IFN-gamma`,df_prevexpo$years_in_endemic, method = "spearman")
-cor.test(df_prevexpo$`D10_Vd2+ gdT cells`,df_prevexpo$years_in_endemic, method = "spearman")
-cor.test(df_prevexpo$`D10_Vd2- gdT cells`,df_prevexpo$years_in_endemic, method = "spearman")
-
-```
-## Reviewer 1 -CMV overrepresentation 
-
-```{r}
-subjectTable_updated %>% 
-  ggplot(aes(x= interaction(Endemic,cmv.status,lex.order = F), y=inf_rbc, color=Endemic)) +
-  geom_violin(width = 0.5,outlier.size = 0) +
-  geom_boxplot(width = 0.2) +
-  geom_jitter(width = 0.1)+
-  stat_compare_means(method = "anova", label.y = 5)+      # Add global p-value
-  stat_compare_means(label = "p.signif", method = "wilcox.test",
-                     ref.group = ".all.",label.y=4.5) +
-    scale_y_continuous(trans='log2',) +
-  labs(x="", y="iRBC (%)") +
-  scale_color_manual(values=ENDEMIC_colors)+
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 45))
-```
-
-
-
-```{r}
-df <- subjectTable_updated %>% select(inf_rbc,Endemic,hemoglobin_gt,ID)
-m0 <- lm(inf_rbc ~ factor(Endemic),df)
-m1 <- lm(inf_rbc ~ factor(Endemic) + factor(hemoglobin_gt), df)
-
-
-compare_performance(m0,m1,m2, rank = TRUE) 
-
-plot(compare_performance(m0,m1,m2))
-
-test_performance(m00,m0,m1,include_formula = TRUE)
-# Equivalent to anova(m1, m2, m3, test='LRT')
-test_likelihoodratio(m1,m2, estimator = "OLS")
-
-modelsummary::modelplot(list("PrevExposure" = m0,
-                                "PrevExposure + SCT" = m1,
-                              "SCT on previous exposure" = m2),
-                        coef_omit = 'Interc',
-                        stars =T, 
-                        facet=F) +
-  labs(#x = 'Coefficients', 
-        # y = 'Term names',
-         title = 'inf_rbc',
-         caption = "") +
-    scale_color_manual(values = randomcoloR::distinctColorPalette(4))
-
-```
-
-
-
-### Linear regression on hemoglobin genotype impact
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`, Acute_IgG3,`Acute_Intermediate monocytes`) %>%  inner_join(subjectTable_updated %>% select(ID,Endemic,hemoglobin_gt,inf_rbc),by="ID") %>% na.omit() 
-
-m00 <- lm(`Acute_IFN-gamma` ~ factor(Endemic), data = df)
-m0 <- lm(`Acute_IFN-gamma` ~ factor(Endemic) + factor(hemoglobin_gt) + Acute_IgG3, data = df)
-m1 <- lm(`Acute_IFN-gamma` ~ factor(Endemic) + factor(hemoglobin_gt) + Acute_IgG3 + `Acute_Intermediate monocytes`, data = df)
-m2 <- lm(`Acute_IFN-gamma` ~ factor(Endemic) + Acute_IgG3 + `Acute_Intermediate monocytes`, data = df)
-
-
-compare_performance(m00, m0,m1,m2, rank = TRUE) 
-
-plot(compare_performance(m00, m0, m1,m2))
-
-test_performance(m00,m0,m1,include_formula = TRUE)
-# Equivalent to anova(m1, m2, m3, test='LRT')
-test_likelihoodratio(m0,m1, estimator = "OLS")
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                             "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes" = m2), 
-                        coef_omit = 'Interc',
-                        stars =T, 
-                        facet=F) +
-  labs(#x = 'Coefficients', 
-        # y = 'Term names',
-         title = 'Linear regression models of IFNgamma  (NPX)',
-         caption = "") +
-    scale_color_manual(values = randomcoloR::distinctColorPalette(4))
-
-anova(m00,m0, m1,m2, test='LRT')
-
-```
-
-
-```{r}
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,`D10_Vd2+ gdT cells`, Acute_IgG3,`Acute_Intermediate monocytes`) %>%  inner_join(subjectTable_updated %>% select(ID,Endemic,hemoglobin_gt,inf_rbc),by="ID") %>% na.omit() 
-
-m1 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + factor(Endemic) + factor(hemoglobin_gt) + Acute_IgG3 + `Acute_Intermediate monocytes`, data = df)
-m2 <- lm(`D10_Vd2+ gdT cells` ~ `Acute_IFN-gamma` + factor(Endemic) + Acute_IgG3 + `Acute_Intermediate monocytes`, data = df)
-
-
-compare_performance(m1,m2, rank = TRUE) 
-
-plot(compare_performance(m1,m2))
-
-test_performance(m00,m0,m1,include_formula = TRUE)
-# Equivalent to anova(m1, m2, m3, test='LRT')
-test_likelihoodratio(m1,m2, estimator = "OLS")
-
-modelsummary::modelplot(list("PrevExposure" = m00,
-                                "iRBC" = m0,
-                             "iRBC | IgG3" = m1,
-                                "iRBC | IgG3 + int. monocytes" = m2), 
-                        coef_omit = 'Interc',
-                        stars =T, 
-                        facet=F) +
-  labs(#x = 'Coefficients', 
-        # y = 'Term names',
-         title = 'Linear regression models of IFNgamma  (NPX)',
-         caption = "") +
-    scale_color_manual(values = randomcoloR::distinctColorPalette(4))
-
-anova(m00,m0, m1,m2, test='LRT')
-
-```
-
-
-
-
-
-```{r}
-temp.selection <- bind_rows(data.ab %>% select(sampleID,feature,value,Time,ID),
-                            mefisto.input %>% rename(sampleID = sample) %>% 
-                              inner_join(sampleTable,by="sampleID") %>% 
-                              mutate(ID = gsub("\\|.*","",sampleID),
-                                     Time = as.factor(gsub(".*\\|","",sampleID))) %>% select(sampleID,feature,value,Time,ID))
-
-temp.selection <- temp.selection %>% mutate(time_feature = paste0(Time,"_",feature)) %>% 
-  filter(time_feature %in% c("Acute_IFN-gamma","Acute_TNF","Acute_IgG1","Acute_IgG3","Acute_Intermediate monocytes","Acute_Vd2+ gdT cells","D10_Vd2+ gdT cells")) %>% 
-  select(-feature,-Time,-sampleID) %>% 
-  spread(time_feature,value) %>% 
-  inner_join(inf_rbc_cluster,by="ID") %>% 
-  inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% 
-  mutate(Endemic = factor(as.factor(Endemic), levels=c("primary_infected","previously_exposed")),
-         hemoglobin_gt = factor(as.factor(hemoglobin_gt), levels=c("AA","AS")))
-
-## Acute iRBC
-df <- subjectTable_updated %>% select(ID,Endemic,hemoglobin_gt,inf_rbc) %>% na.omit() %>% 
-  mutate(Endemic = factor(as.factor(Endemic), levels=c("primary_infected","previously_exposed")),
-         hemoglobin_gt = factor(as.factor(hemoglobin_gt), levels=c("AA","AS")))
-
-
-m00 <- lm(inf_rbc ~ Endemic, data = df)
-m_rbc <- lm(inf_rbc ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m00)
-
-summary(m_rbc)
-anova(m_rbc)
-```
-
-
-```{r}
-summary(lm(inf_rbc ~ Endemic + hemoglobin_gt, data = df))
-summary(lm(inf_rbc ~ 1 + Endemic + hemoglobin_gt, data = df))
-summary(lm(rank(inf_rbc) ~ 1 + Endemic + hemoglobin_gt, data = df))
-wilcox.test()
-
-df %>% wilcox_test(inf_rbc ~ hemoglobin_gt)
-df %>% wilcox_test(inf_rbc ~ Endemic)
-df %>% filter(Endemic=="previously_exposed") %>% wilcox_test(inf_rbc ~ hemoglobin_gt)
-
-m_rbc <- lm(inf_rbc ~ 1 + Endemic + hemoglobin_gt, data = df)
-
-lm(inf_rbc ~ 1 + Endemic + hemoglobin_gt, data = df) %>% summary() %>% print(digits = 8) # show summary output
-lm(inf_rbc ~ 1 + Endemic + hemoglobin_gt, data = df) %>% summary() %>% print(digits = 8) # show summary output
-lm(inf_rbc ~ Endemic + hemoglobin_gt, data = df) %>% summary() %>% print(digits = 8) # show summary output
-
-  m_rbc %>% summary() %>% print(digits = 8) # show summary output
-  confint(lm) # show confidence intervals
-  
-  
-aov(inf_rbc ~ Endemic + hemoglobin_gt, data = df) %>% summary()
-```
-```{r}
-library(car)
-null_model <- aov(inf_rbc ~ Endemic, df)
-ancova_model <- aov(inf_rbc ~ Endemic + hemoglobin_gt, data = df)
-Anova(ancova_model, type="III")
-```
-
-
-```{r}
-## IFNgamma
-df <- temp.selection %>% select(ID,`Acute_IFN-gamma`,Endemic)  %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(`Acute_IFN-gamma` ~ Endemic, data = df)
-m_ifng <- lm(`Acute_IFN-gamma` ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m0)
-anova(m_ifng)
-
-## TNF
-df <- temp.selection %>% select(ID,`Acute_TNF`,Endemic)  %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(`Acute_TNF` ~ Endemic, data = df)
-m_tnf <- lm(`Acute_TNF` ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m_tnf)
-anova(m_tnf)
-
-## Acute Vd2 gdTcells
-df <- temp.selection %>% select(ID,`Acute_Vd2+ gdT cells`,Endemic)  %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(`Acute_Vd2+ gdT cells` ~ Endemic, data = df)
-m_aVd2 <- lm(`Acute_Vd2+ gdT cells` ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m0)
-anova(m0)
-
-## D10 Vd2 gdTcells
-df <- temp.selection %>% select(ID,`D10_Vd2+ gdT cells`,Endemic) %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(`D10_Vd2+ gdT cells` ~ Endemic, data = df)
-m_10Vd2 <- lm(`D10_Vd2+ gdT cells` ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m0)
-anova(m0)
-
-## D10 Vd2 gdTcells
-df <- temp.selection %>% select(ID,inf_rbc,Endemic) %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(inf_rbc ~ Endemic, data = df)
-m_rbc <- lm(inf_rbc ~ Endemic + hemoglobin_gt, data = df)
-
-summary(m0)
-anova(m_rbc)
-
-## Acute/D10 FC
-df <- temp.selection %>% select(ID,`Acute_Vd2+ gdT cells`,`D10_Vd2+ gdT cells`,Endemic) %>% mutate(fc = `D10_Vd2+ gdT cells`/`Acute_Vd2+ gdT cells`) %>% inner_join(subjectTable_updated %>% select(ID,hemoglobin_gt),by="ID") %>% na.omit()
-
-m00 <- lm(fc ~ factor(Endemic), data = df)
-m_a10Vd2fc <- lm(fc ~ factor(Endemic) + factor(hemoglobin_gt), data = df)
-
-summary(m_a10Vd2fc)
-anova(m_a10Vd2fc)
-
-modelsummary::modelplot(list("Acute iRBC" = m_rbc,
-                             "Acute IFNg" = m_ifng,
-                             "Acute TFN" = m_tnf,
-                             "Acute Vd2+ gdT" = m_aVd2,
-                             "D10 Vd2+ gdT" = m_10Vd2), 
-                        coef_omit = 'Interc',
-                        stars =T, 
-                        facet=F) +
-  labs(#x = 'Coefficients', 
-    # y = 'Term names',
-    title = 'Linear regression models of IFNgamma  (NPX)',
-    caption = "") +
-  scale_color_manual(values = randomcoloR::distinctColorPalette(5))
-```
-
-
-## test against pca
-```{r}
-data.wide <- data %>% 
-  filter(view=="Olink",
-         Time=="Acute") %>% 
-  inner_join(subjectTable_updated %>% select(ID,Endemic,hemoglobin_gt,cmv.status), by="ID") %>% 
-  spread(feature,value) %>% 
-  column_to_rownames("ID") 
-
-pcaRes <- prcomp(data.wide %>% select(`4E-BP1`:VEGFA))
-
-data.wide_meta <- data.wide %>% select(Endemic, hemoglobin_gt,cmv.status) 
-
-
-varExp <- round(pcaRes$sdev^2 / sum(pcaRes$sdev^2) * 100)
-pcaDF <- data.frame(
-  PC1 = pcaRes$x[, 1],
-  PC2 = pcaRes$x[, 2],
-  Endemic = data.wide_meta$Endemic,
-  CMV = data.wide_meta$cmv.status,
-  Hemoglobin = data.wide_meta$hemoglobin_gt#,
-  #Sample = rownames(original_data_origin_group)
-) %>% 
-gather(meta_feature, meta_value,Endemic:Hemoglobin)
-
-  ggplot(data = pcaDF,
-                           mapping = aes(x = PC1, y = PC2, color = meta_value, label = NULL)) +
-  geom_point(size = 3) +
-  #geom_text_repel(size = 4) +
-  labs(x = paste0("PC1 (", varExp[1], " %)"), y = paste0("PC2 (", varExp[2], " %)")) +
-  theme_minimal() +
-  theme(axis.text = element_text(size = 12), legend.text = element_text(size = 10)) +
-  scale_color_manual(values = brewer.pal(6, "Accent")) +
-    facet_grid(~meta_feature) +
-    theme(legend.position = "top")
-
-```
-
-```{r}
-weights.all %>% 
-  filter(factor=="Factor1",
-         value>=0) %>% 
-  group_by(view) %>% 
-  top_n(10,value)
-```
 
 
