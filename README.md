@@ -38,7 +38,7 @@ MEFISTO is part of the MultiOmicsFactorAnalysis (MOFA), publicly accessible here
 
 R markdown scripts to reproduce Figures
 
--   `scripts/Figure1` used for **Figure 1B, D-E**
+-   `scripts/Figure1.Rmd` used for **Figure 1B, D-E**
 -   `scripts/MEFISTO_downstream.Rmd` used for **Figures 2 & 4A,C & S2A-C & S4B**
 -   `scripts/InternalExternalComparison.Rmd` used for **Figures S1C-D & S2D-G & S3**
 -   `scripts/Correlation.Rmd` used for **Figures 3 & 4B & 7B-E**
